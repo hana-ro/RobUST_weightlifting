@@ -86,8 +86,7 @@ public class RobotController : MonoBehaviour
         }
 
         // Create RobUST description (single allocation at startup)
-        robotDescription = RobUSTDescription.Create(numCables, chestAPDistance, chestMLDistance, 
-                                                    userMass);
+        robotDescription = RobUSTDescription.Create(numCables, chestAPDistance, chestMLDistance, userMass);
         Debug.Log($"RobUST description created: {numCables} cables, AP={chestAPDistance}m, ML={chestMLDistance}m");
 
         // Initialize Modules
