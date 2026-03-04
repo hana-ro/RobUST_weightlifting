@@ -216,9 +216,6 @@ public class RobotVisualizer : MonoBehaviour
         for (int i = 0; i < GoalTrajSteps; i++)
             goalTrajectorySpheres[i].position = (Vector3)RobotToUnityPos((float3)goalSnapshot[i]);
 
-        // Update MPC Trajectory
-        for (int i = 0; i < GoalTrajSteps; i++)
-            mpcTrajectorySpheres[i].position = (Vector3)RobotToUnityPos((float3)mpcSnapshot[i]);
     }
 
     // =========================================================
