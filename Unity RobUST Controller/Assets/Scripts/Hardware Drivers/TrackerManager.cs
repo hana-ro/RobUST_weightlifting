@@ -17,10 +17,10 @@ public class TrackerManager : MonoBehaviour
 
     [Header("Tracker Serial Numbers")]
     [Tooltip("Serial number for the Center of Mass (CoM) tracker.")]
-    public string chestTrackerSerial = "LHR-FFFFFFFF"; 
+    public string comTrackerSerial = "LHR-FFFFFFFF"; 
 
     [Tooltip("Serial number for the End-Effector tracker.")]
-    public string pelvisTrackerSerial = "LHR-FFFFFFFF";
+    public string endEffectorSerial = "LHR-FFFFFFFF";
 
     [Tooltip("Serial number for the Frame tracker, which defines the world origin.")]
     public string frameTrackerSerial = "LHR-FFFFFFFF";
@@ -30,14 +30,14 @@ public class TrackerManager : MonoBehaviour
     private TrackedDevicePose_t[] trackedDevicePoses = new TrackedDevicePose_t[OpenVR.k_unMaxTrackedDeviceCount];
     
     // Indices for the trackers
-    private uint chestTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
-    private uint pelvisTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
+    private uint comTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
+    private uint endEffectorIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
     private uint frameTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
 
     // Thread-safe data storage
     private readonly object dataLock = new object();
-    private TrackerData chestTrackerData = new TrackerData();
-    private TrackerData pelvisTrackerData = new TrackerData();
+    private TrackerData comTrackerData = new TrackerData();
+    private TrackerData endEffectorData = new TrackerData();
     private TrackerData frameTrackerData = new TrackerData();
 
     // High-frequency update thread
@@ -90,7 +90,7 @@ public class TrackerManager : MonoBehaviour
     /// </summary>
     private bool FindAllTrackers()
     {
-        chestTrackerIndex = pelvisTrackerIndex = frameTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
+        comTrackerIndex = endEffectorIndex = frameTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
         var buffer = new System.Text.StringBuilder((int)OpenVR.k_unMaxPropertyStringSize);
         
         for (uint deviceId = 0; deviceId < OpenVR.k_unMaxTrackedDeviceCount; deviceId++)
@@ -107,14 +107,14 @@ public class TrackerManager : MonoBehaviour
             string serial = buffer.ToString();
             Debug.Log($"Discovered tracker - Device: {deviceId}, Serial: {serial}");
 
-            if (string.Equals(serial, chestTrackerSerial, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(serial, comTrackerSerial, StringComparison.OrdinalIgnoreCase))
             {
-                chestTrackerIndex = deviceId;
+                comTrackerIndex = deviceId;
                 Debug.Log($"--> Matched CoM tracker: {serial}");
             }
-            else if (string.Equals(serial, pelvisTrackerSerial, StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(serial, endEffectorSerial, StringComparison.OrdinalIgnoreCase))
             {
-                pelvisTrackerIndex = deviceId;
+                endEffectorIndex = deviceId;
                 Debug.Log($"--> Matched End-Effector tracker: {serial}");
             }
             else if (string.Equals(serial, frameTrackerSerial, StringComparison.OrdinalIgnoreCase))
@@ -126,14 +126,14 @@ public class TrackerManager : MonoBehaviour
 
         // Validate all trackers were found
         bool valid = true;
-        if (chestTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        if (comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
-            Debug.LogError($"CoM tracker '{chestTrackerSerial}' not found.", this);
+            Debug.LogError($"CoM tracker '{comTrackerSerial}' not found.", this);
             valid = false;
         }
-        if (pelvisTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        if (endEffectorIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
-            Debug.LogError($"End-effector tracker '{pelvisTrackerSerial}' not found.", this);
+            Debug.LogError($"End-effector tracker '{endEffectorSerial}' not found.", this);
             valid = false;
         }
         if (frameTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
@@ -166,18 +166,12 @@ public class TrackerManager : MonoBehaviour
 
             lock (dataLock)
             {
-                if (chestTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid && trackedDevicePoses[chestTrackerIndex].bPoseIsValid)
-                {
-                    UpdateMatrixFromOpenVR(trackedDevicePoses[chestTrackerIndex].mDeviceToAbsoluteTracking, ref chestTrackerData.PoseMatrix);
-                }
-                if (pelvisTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid && trackedDevicePoses[pelvisTrackerIndex].bPoseIsValid)
-                {
-                    UpdateMatrixFromOpenVR(trackedDevicePoses[pelvisTrackerIndex].mDeviceToAbsoluteTracking, ref pelvisTrackerData.PoseMatrix);
-                }
+                if (comTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid && trackedDevicePoses[comTrackerIndex].bPoseIsValid)
+                    UpdateMatrixFromOpenVR(trackedDevicePoses[comTrackerIndex].mDeviceToAbsoluteTracking, ref comTrackerData.PoseMatrix);
+                if (endEffectorIndex != OpenVR.k_unTrackedDeviceIndexInvalid && trackedDevicePoses[endEffectorIndex].bPoseIsValid)
+                    UpdateMatrixFromOpenVR(trackedDevicePoses[endEffectorIndex].mDeviceToAbsoluteTracking, ref endEffectorData.PoseMatrix);
                 if (frameTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid && trackedDevicePoses[frameTrackerIndex].bPoseIsValid)
-                {
                     UpdateMatrixFromOpenVR(trackedDevicePoses[frameTrackerIndex].mDeviceToAbsoluteTracking, ref frameTrackerData.PoseMatrix);
-                }
             }
 
             s_WorkloadNs.Value = (long)((System.Diagnostics.Stopwatch.GetTimestamp() - loopStartTick) * ticksToNs);
@@ -192,25 +186,23 @@ public class TrackerManager : MonoBehaviour
             // If we are late (processing took > 11.1ms), reset the pacer
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
             if (now > nextTargetTime)
-            {
                 nextTargetTime = now + intervalTicks;
-            }
         }
     }
 
-    public void GetChestTrackerData(out TrackerData data)
+    public void GetCoMTrackerData(out TrackerData data)
     {
         lock (dataLock)
         {
-            data = chestTrackerData;
+            data = comTrackerData;
         }
     }
 
-    public void GetPelvisTrackerData(out TrackerData data)
+    public void GetEndEffectorTrackerData(out TrackerData data)
     {
         lock (dataLock)
         {
-            data = pelvisTrackerData;
+            data = endEffectorData;
         }
     }
 
@@ -237,6 +229,7 @@ public class TrackerManager : MonoBehaviour
         targetMatrix.m10 = -openVRMatrix.m4;  targetMatrix.m11 = -openVRMatrix.m6;  targetMatrix.m12 = -openVRMatrix.m5;  targetMatrix.m13 = openVRMatrix.m7;
         // Row 2
         targetMatrix.m20 = -openVRMatrix.m8;  targetMatrix.m21 = -openVRMatrix.m10;  targetMatrix.m22 = -openVRMatrix.m9; targetMatrix.m23 = openVRMatrix.m11;
+        targetMatrix.m33 = 1f; // enforce homogeneous row
     }
 
     private void OnDestroy()
