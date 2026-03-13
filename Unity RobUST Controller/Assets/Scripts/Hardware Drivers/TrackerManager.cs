@@ -25,6 +25,13 @@ public class TrackerManager : MonoBehaviour
     [Tooltip("Serial number for the Frame tracker, which defines the world origin.")]
     public string frameTrackerSerial = "LHR-FFFFFFFF";
 
+    [Header("Tracker Requirements")]
+    [Tooltip("When false, initialization can proceed without a dedicated CoM tracker.")]
+    public bool requireComTracker = false;
+
+    [Tooltip("When false, initialization can proceed without a frame tracker (identity frame fallback).")]
+    public bool requireFrameTracker = true;
+
     // OpenVR system and poses
     private CVRSystem vrSystem;
     private TrackedDevicePose_t[] trackedDevicePoses = new TrackedDevicePose_t[OpenVR.k_unMaxTrackedDeviceCount];
@@ -33,6 +40,10 @@ public class TrackerManager : MonoBehaviour
     private uint comTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
     private uint endEffectorIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
     private uint frameTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
+
+    public bool HasComTracker => comTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid;
+    public bool HasFrameTracker => frameTrackerIndex != OpenVR.k_unTrackedDeviceIndexInvalid;
+    public bool HasEndEffectorTracker => endEffectorIndex != OpenVR.k_unTrackedDeviceIndexInvalid;
 
     // Thread-safe data storage
     private readonly object dataLock = new object();
@@ -52,6 +63,10 @@ public class TrackerManager : MonoBehaviour
     {
         try
         {
+            // If CoM serial is unset/placeholder, force optional mode to prevent accidental startup failures.
+            if (string.IsNullOrWhiteSpace(comTrackerSerial) || string.Equals(comTrackerSerial, "LHR-FFFFFFFF", StringComparison.OrdinalIgnoreCase))
+                requireComTracker = false;
+
             // Initialize OpenVR in a way that doesn't require a headset
             EVRInitError eVRInitError = EVRInitError.None;
             vrSystem = OpenVR.Init(ref eVRInitError, EVRApplicationType.VRApplication_Background);
@@ -126,20 +141,28 @@ public class TrackerManager : MonoBehaviour
 
         // Validate all trackers were found
         bool valid = true;
-        if (comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        if (requireComTracker && comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
             Debug.LogError($"CoM tracker '{comTrackerSerial}' not found.", this);
             valid = false;
+        }
+        else if (!requireComTracker && comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        {
+            Debug.LogWarning("CoM tracker not found. Running in EE-only mode for CoM-dependent signals.", this);
         }
         if (endEffectorIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
             Debug.LogError($"End-effector tracker '{endEffectorSerial}' not found.", this);
             valid = false;
         }
-        if (frameTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        if (requireFrameTracker && frameTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
             Debug.LogError($"Frame tracker '{frameTrackerSerial}' not found.", this);
             valid = false;
+        }
+        else if (!requireFrameTracker && frameTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        {
+            Debug.LogWarning("Frame tracker not found. Using identity robot frame fallback.", this);
         }
 
         return valid;

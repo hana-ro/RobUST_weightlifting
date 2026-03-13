@@ -24,6 +24,12 @@ public class RobotController : MonoBehaviour
     [Tooltip("The LabviewTcpCommunicator instance for sending motor commands.")]
     [SerializeField] private LabviewTcpCommunicator tcpCommunicator;
 
+    [Header("Tracker Requirements")]
+    [Tooltip("Require CoM tracker at startup. Disable for EE + Frame testing.")]
+    [SerializeField] private bool requireComTracker = false;
+    [Tooltip("Require frame tracker at startup. Keep enabled when frame defines robot origin.")]
+    [SerializeField] private bool requireFrameTracker = true;
+
     [Header("Visualization")]
     [Tooltip("Handles tracker/camera visuals. Keeps RobotController logic-only.")]
     [SerializeField] private RobotVisualizer visualizer;
@@ -33,8 +39,13 @@ public class RobotController : MonoBehaviour
     [SerializeField] private bool isLabviewControlEnabled = true;
     private bool isForcePlateEnabled = true;
 
-    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE }
+    [Header("PID Target")]
+    [Tooltip("Relative vertical target offset when entering PID mode. Robot frame Y is up in this project.")]
+    [SerializeField] private float pidVerticalOffsetMeters = 0.3f;
+
+    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, PID }
     [SerializeField] private volatile CONTROL_MODE currentControlMode = CONTROL_MODE.OFF;
+    private CONTROL_MODE previousControlMode = CONTROL_MODE.OFF;
 
     [Header("Robot Geometry Configuration")]
     [Tooltip("Number of cables in the system. We currently support 8 or 4 cables")]
@@ -57,6 +68,7 @@ public class RobotController : MonoBehaviour
 
     // Controllers
     private ImpedanceController impedanceController;
+    private PIDController pidController;
     private CableTensionPlanner tensionPlanner;
 
     // Static frame reference captured only at startup to prevent drift
@@ -64,6 +76,9 @@ public class RobotController : MonoBehaviour
     private Thread controllerThread;
     private volatile bool isRunning = false;
     private volatile bool isTrajectoryActive = false;
+    private volatile bool pidRecaptureRequested = false;
+    private bool pidTargetCaptured = false;
+    private RBState pidCapturedTarget;
 
     private void Start()
     {
@@ -97,6 +112,11 @@ public class RobotController : MonoBehaviour
             enabled = false;
             return;
         }
+
+        // Enforce runtime tracker requirements from RobotController to avoid stale prefab values on TrackerManager.
+        trackerManager.requireComTracker = requireComTracker;
+        trackerManager.requireFrameTracker = requireFrameTracker;
+
         if (!trackerManager.Initialize())
         {
             Debug.LogError("Failed to initialize TrackerManager.", this);
@@ -117,10 +137,14 @@ public class RobotController : MonoBehaviour
         dataLogger = new DataLogger(60, 100);
 
         System.Threading.Thread.Sleep(500); // allow tracker thread to go live
-        trackerManager.GetFrameTrackerData(out robot_frame_tracker); // import Capture static frame at startup 
+        if (trackerManager.HasFrameTracker)
+            trackerManager.GetFrameTrackerData(out robot_frame_tracker); // import captured static frame at startup
+        else
+            robot_frame_tracker = new TrackerData(Matrix4x4.identity);
 
         // Finally Initialize Controller modules and begin control thread
         impedanceController = new ImpedanceController(userMass);
+        pidController = new PIDController(userMass);
         tensionPlanner = new CableTensionPlanner(robotDescription);
         
         controllerThread = new Thread(controlLoop)
@@ -140,6 +164,11 @@ public class RobotController : MonoBehaviour
         if (Keyboard.current.spaceKey.wasPressedThisFrame) { isTrajectoryActive = !isTrajectoryActive; }
         if (Keyboard.current.oKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.OFF; isTrajectoryActive = false; }
         if (Keyboard.current.tKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.TRANSPARENT; }
+        if (Keyboard.current.pKey.wasPressedThisFrame)
+        {
+            currentControlMode = CONTROL_MODE.PID;
+            pidRecaptureRequested = true;
+        }
     }
 
     /// <summary>
@@ -168,12 +197,30 @@ public class RobotController : MonoBehaviour
 
         while (isRunning)
         {
+            if (pidRecaptureRequested)
+            {
+                pidController?.Reset();
+                pidTargetCaptured = false;
+                pidRecaptureRequested = false;
+            }
+
+            if (currentControlMode != previousControlMode)
+            {
+                pidController?.Reset();
+                pidTargetCaptured = false;
+                previousControlMode = currentControlMode;
+            }
+
             long loopStartTick = System.Diagnostics.Stopwatch.GetTimestamp();
             s_IntervalNs.Value = (long)((loopStartTick - lastLoopTick) * ticksToNs);
             lastLoopTick = loopStartTick;
 
             trackerManager.GetEndEffectorTrackerData(out TrackerData rawEndEffectorData);
-            trackerManager.GetCoMTrackerData(out TrackerData rawComData);
+            TrackerData rawComData;
+            if (trackerManager.HasComTracker)
+                trackerManager.GetCoMTrackerData(out rawComData);
+            else
+                rawComData = rawEndEffectorData;
             double4x4 eePose_RF = math.mul(frameInv, ToDouble4x4(rawEndEffectorData.PoseMatrix));
             double4x4 comPose_RF = math.mul(frameInv, ToDouble4x4(rawComData.PoseMatrix));
 
@@ -225,6 +272,32 @@ public class RobotController : MonoBehaviour
                     impedanceController.UpdateState(eePose_RF, filter_10Hz.EELinearVelocity, filter_10Hz.EEAngularVelocity, staticPoint);
                     Wrench goalWrench = impedanceController.computeNextControl();
                     solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, goalWrench);
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
+                    break;
+                case CONTROL_MODE.PID:
+                    if (!pidTargetCaptured)
+                    {
+                        double3 currentPos = eePose_RF.c3.xyz;
+                        double3 targetPos = currentPos + new double3(0.0, pidVerticalOffsetMeters, 0.0);
+                        double3 currentEulerZYX = RotationToEulerZYX(eePose_RF);
+                        pidCapturedTarget = new RBState(targetPos, currentEulerZYX, double3.zero, double3.zero);
+                        pidTargetCaptured = true;
+                        Debug.Log($"PID target captured: current EE + {pidVerticalOffsetMeters:F3} m on +Y (vertical).");
+                    }
+
+                    Xref_horizon.Fill(pidCapturedTarget);
+
+                    pidController.UpdateState(
+                        eePose_RF,
+                        filter_10Hz.EELinearVelocity,
+                        filter_10Hz.EEAngularVelocity,
+                        pidCapturedTarget,
+                        1.0 / ctrl_freq
+                    );
+
+                    Wrench pidGoalWrench = pidController.computeNextControl();
+                    solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, pidGoalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
                     break;
@@ -294,6 +367,39 @@ public class RobotController : MonoBehaviour
             m.m20, m.m21, m.m22, m.m23,
             m.m30, m.m31, m.m32, m.m33
         );
+    }
+
+    /// <summary>
+    /// Converts a rotation matrix to ZYX Euler angles (roll=x, pitch=y, yaw=z)
+    /// such that R = Rz(yaw) * Ry(pitch) * Rx(roll).
+    /// </summary>
+    private static double3 RotationToEulerZYX(double4x4 pose)
+    {
+        double r00 = pose.c0.x;
+        double r01 = pose.c1.x;
+        double r10 = pose.c0.y;
+        double r11 = pose.c1.y;
+        double r20 = pose.c0.z;
+        double r21 = pose.c1.z;
+        double r22 = pose.c2.z;
+
+        double pitch = math.asin(math.clamp(-r20, -1.0, 1.0));
+        double cp = math.cos(pitch);
+
+        double roll;
+        double yaw;
+        if (math.abs(cp) > 1e-6)
+        {
+            roll = math.atan2(r21, r22);
+            yaw = math.atan2(r10, r00);
+        }
+        else
+        {
+            roll = 0.0;
+            yaw = math.atan2(-r01, r11);
+        }
+
+        return new double3(roll, pitch, yaw);
     }
 
 }

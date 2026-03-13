@@ -38,6 +38,7 @@ public sealed class RobUSTDescription
     public readonly double3 FP_FrontRight;
 
     // Full 8-cable hardware definition (Static Database from vive tracker measurement)
+    // Frame tracker defines global coordinate system: Origin at frame Vive, Z going up, Y going right, and X going toards monitor (away from RobUST) 
     private static readonly double3[] AllPulleyPositions = new double3[]
     {
         new double3(-0.8000, 1.650, 0.9875),   // 0: Front-Right Top (Motor 10)
@@ -48,6 +49,17 @@ public sealed class RobUSTDescription
         new double3(-0.7800, 0.0330, -0.3340),  // 5: Front-Left Bottom (Motor 7)
         new double3(0.9850, 0.0520, -0.5165),   // 6: Back-Left Bottom (Motor 2)
         new double3(0.9800, 1.6890, -0.4994)    // 7: Back-Right Bottom (Motor 13)
+
+
+        //testing changing the coordinate system definition below
+        // new double3(-0.8000, 0.9875, -1.650),   // 0: Front-Right Top (Motor 10)
+        // new double3(-0.7900, 0.9540, -0.0022),   // 1: Front-Left Top (Motor 5)
+        // new double3(0.9580, 0.9828, -0.0335),    // 2: Back-Left Top (Motor 4)
+        // new double3(0.9650, 1.0000, -1.6420), // 3: Back-Right Top (Motor 11)
+        // new double3(-0.7850, -0.2920, -1.6750),  // 4: Front-Right Bottom (Motor 8)
+        // new double3(-0.7800, -0.3340, -0.0330),  // 5: Front-Left Bottom (Motor 7)
+        // new double3(0.9850, -0.5165, -0.0520),   // 6: Back-Left Bottom (Motor 2)
+        // new double3(0.9800, -0.4994, -1.6890)    // 7: Back-Right Bottom (Motor 13)
     };
 
     // Mapping from solver index to motor driver index for the full set
