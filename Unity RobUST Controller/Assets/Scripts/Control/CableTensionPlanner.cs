@@ -86,38 +86,16 @@ public class CableTensionPlanner
     /// Calculates the desired cable tensions based on real-time tracker and force data.
     /// All calculations use Unity.Mathematics SIMD types for performance.
     /// </summary>
-    /// <param name="eeInRobotFrame">The 4x4 pose matrix of the End-Effector already transformed into Robot Frame.</param>
+    /// <param name="eeLInRobotFrame">The 4x4 pose matrix of the left End-Effector already transformed into Robot Frame.</param>
+    /// <param name="eeRInRobotFrame">The 4x4 pose matrix of the right End-Effector already transformed into Robot Frame.</param>
     /// <param name="desiredWrench">The desired wrench (force and torque) to be applied by the cables.</param>
-    public double[] CalculateTensions(double4x4 eeInRobotFrame, Wrench desiredWrench)
+    public double[] CalculateTensions(double4x4 eeLInRobotFrame, double4x4 eeRInRobotFrame, Wrench desiredWrench)
     {
-        int numCables = robot.NumCables;
-        
-        // Build Structure Matrix using SIMD operations
-        for (int i = 0; i < numCables; i++)
-        {
-            // Transform attachment point to robot frame
-            double3 attachLocal = robot.LocalAttachmentPoints[i];
-            double3 attachRobotFrame = TransformPoint(eeInRobotFrame, attachLocal);
+        double3 barbellCenter_RF = 0.5 * (eeLInRobotFrame.c3.xyz + eeRInRobotFrame.c3.xyz);
 
-            // Calculate cable direction vector (pulley - attachment)
-            double3 cableVec = robot.FramePulleyPositions[i] - attachRobotFrame;
-            double3 u_i = normalize(cableVec); 
-
-            // Calculate torque arm: from belt center to attachment point
-            double3 r_local = attachLocal - robot.BeltCenter_EE_Frame;
-            double3 r_robotFrame = TransformVector(eeInRobotFrame, r_local);
-            
-            // Torque component using SIMD cross product
-            double3 torque_i = cross(r_robotFrame, u_i);
-
-            // Fill structure matrix directly
-            sMatrix[0, i] = u_i.x;
-            sMatrix[1, i] = u_i.y;
-            sMatrix[2, i] = u_i.z;
-            sMatrix[3, i] = torque_i.x;
-            sMatrix[4, i] = torque_i.y;
-            sMatrix[5, i] = torque_i.z;
-        }
+        // Build Structure Matrix from tracker-specific cable sets
+        BuildStructureColumns(eeLInRobotFrame, barbellCenter_RF, robot.LeftCableIndices);
+        BuildStructureColumns(eeRInRobotFrame, barbellCenter_RF, robot.RightCableIndices);
 
         // Extract wrench components (already double3, no conversion needed)
         double3 desiredForce = desiredWrench.Force;
@@ -156,22 +134,63 @@ public class CableTensionPlanner
         return tensions;
     }
 
+    private void BuildStructureColumns(double4x4 eeInRobotFrame, double3 barbellCenter_RF, int[] cableIndices)
+    {
+        for (int k = 0; k < cableIndices.Length; k++)
+        {
+            int i = cableIndices[k];
+
+            // Transform attachment point to robot frame
+            double3 attachLocal = robot.LocalAttachmentPoints[i];
+            double3 attachRobotFrame = TransformPoint(eeInRobotFrame, attachLocal);
+
+            // Calculate cable direction vector (pulley - attachment)
+            double3 cableVec = robot.FramePulleyPositions[i] - attachRobotFrame;
+            double3 u_i = normalize(cableVec);
+
+            // Calculate torque arm: from live barbell center (midpoint of trackers) to attachment point
+            double3 r_robotFrame = attachRobotFrame - barbellCenter_RF;
+
+            // Torque component using SIMD cross product
+            double3 torque_i = cross(r_robotFrame, u_i);
+
+            // Fill structure matrix directly
+            sMatrix[0, i] = u_i.x;
+            sMatrix[1, i] = u_i.y;
+            sMatrix[2, i] = u_i.z;
+            sMatrix[3, i] = torque_i.x;
+            sMatrix[4, i] = torque_i.y;
+            sMatrix[5, i] = torque_i.z;
+        }
+    }
+
     /// <summary>
     /// Calculates the resultant wrench (force and torque) that would be applied to the end-effector
     /// given a specific set of cable tensions. Effectivley performs W_resultant = S * T.
     /// </summary>
-    /// <param name="eeInRobotFrame">The 4x4 pose matrix of the End-Effector in Robot Frame.</param>
+    /// <param name="eeLInRobotFrame">The 4x4 pose matrix of the left End-Effector tracker in Robot Frame.</param>
+    /// <param name="eeRInRobotFrame">The 4x4 pose matrix of the right End-Effector tracker in Robot Frame.</param>
     /// <param name="solver_tensions">The array of cable tension values.</param>
     /// <returns>The calculated resultant Wrench.</returns>
-    public Wrench CalculateResultantWrench(double4x4 eeInRobotFrame, double[] solver_tensions)
+    public Wrench CalculateResultantWrench(double4x4 eeLInRobotFrame, double4x4 eeRInRobotFrame, double[] solver_tensions)
     {
-        int numCables = robot.NumCables;
         double3 resultantForce = new double3(0);
         double3 resultantTorque = new double3(0);
+        double3 barbellCenter_RF = 0.5 * (eeLInRobotFrame.c3.xyz + eeRInRobotFrame.c3.xyz);
 
-        // Iterate over each cable to sum up forces and torques
-        for (int i = 0; i < numCables; i++)
+        WrenchFromCableGroup(eeLInRobotFrame, barbellCenter_RF, robot.LeftCableIndices, solver_tensions, ref resultantForce, ref resultantTorque);
+        WrenchFromCableGroup(eeRInRobotFrame, barbellCenter_RF, robot.RightCableIndices, solver_tensions, ref resultantForce, ref resultantTorque);
+
+        return new Wrench(resultantForce, resultantTorque);
+    }
+
+    private void WrenchFromCableGroup(double4x4 eeInRobotFrame, double3 barbellCenter_RF, int[] cableIndices, double[] solver_tensions,
+                                                ref double3 resultantForce, ref double3 resultantTorque)
+    {
+        for (int k = 0; k < cableIndices.Length; k++)
         {
+            int i = cableIndices[k];
+
             // 1. Transform attachment point to robot frame
             double3 attachLocal = robot.LocalAttachmentPoints[i];
             double3 attachRobotFrame = TransformPoint(eeInRobotFrame, attachLocal);
@@ -184,16 +203,13 @@ public class CableTensionPlanner
             double3 force_i = u_i * solver_tensions[i];
             resultantForce += force_i;
 
-            // 4. Calculate torque arm: r = attachment - BeltCenter (in global frame)
-            double3 r_local = attachLocal - robot.BeltCenter_EE_Frame;
-            double3 r_robotFrame = TransformVector(eeInRobotFrame, r_local); // vector rotation only
+            // 4. Calculate torque arm: r = attachment - live BarbellCenter midpoint (in robot frame)
+            double3 r_robotFrame = attachRobotFrame - barbellCenter_RF;
 
             // 5. Torque Contribution: Tau_i = r x F_i
             double3 torque_i = cross(r_robotFrame, force_i);
             resultantTorque += torque_i;
         }
-
-        return new Wrench(resultantForce, resultantTorque);
     }
 
 

@@ -1,6 +1,7 @@
 using UnityEngine;
 using Unity.Mathematics;
 using System;
+using System.Collections.Generic;
 
 /// <summary>
 /// Complete robot description for the RobUST cable-driven parallel robot.
@@ -14,11 +15,11 @@ public sealed class RobUSTDescription
     /// <summary>Pulley positions in robot frame [m] (double3 for SIMD)</summary>
     public readonly double3[] FramePulleyPositions;
     
-    /// <summary>Cable attachment points on belt, in end-effector frame [m]</summary>
+    /// <summary>Cable attachment points on barbell, in end-effector frame [m]</summary>
     public readonly double3[] LocalAttachmentPoints;
     
-    /// <summary>Belt center in end-effector frame [m]</summary>
-    public readonly double3 BeltCenter_EE_Frame;
+    /// <summary>Barbell center in end-effector frame [m]</summary>
+    public readonly double3 BarbellCenter_EE_Frame;
     
     
     // ============ User Parameters ============
@@ -54,7 +55,13 @@ public sealed class RobUSTDescription
     // Corresponds to the order in AllPulleyPositions
     public static readonly int[] FullMotorMapping = new int[] { 9, 4, 3, 10, 7, 6, 1, 12 };
 
+    // Source-index grouping by end-effector side (x in local EE frame)
+    private static readonly int[] LeftSideSourceIndices = new int[] { 0, 3, 4, 7 };
+    private static readonly int[] RightSideSourceIndices = new int[] { 1, 2, 5, 6 };
+
     public readonly int[] SolverToMotorMap;
+    public readonly int[] LeftCableIndices;
+    public readonly int[] RightCableIndices;
 
     private RobUSTDescription(int numCables, double chestAP, double chestML, 
                               double userMass)
@@ -80,12 +87,7 @@ public sealed class RobUSTDescription
         SolverToMotorMap = new int[numCables];
 
         // Determine active subset based on requested numCables
-        int[] activeIndices = numCables switch
-        {
-            8 => new int[] { 0, 1, 2, 3, 4, 5, 6, 7 },
-            4 => new int[] { 0, 1, 2, 3 }, // Top cables only
-            _ => throw new System.ArgumentException($"Unsupported cable count: {numCables}. valid options: 4, 8")
-        };
+        int[] activeIndices = BuildActiveCableIndices(numCables);
 
         double halfML = chestML / 2.0;
         
@@ -103,7 +105,54 @@ public sealed class RobUSTDescription
             else if (srcIdx == 3 || srcIdx == 7) LocalAttachmentPoints[i] = new double3(-halfML, 0, 0);
         }
 
-        BeltCenter_EE_Frame = new double3(0, -chestAP / 2.0, 0);
+        (LeftCableIndices, RightCableIndices) = BuildTrackerSideCableIndices(LocalAttachmentPoints);
+
+        BarbellCenter_EE_Frame = new double3(0, -chestAP / 2.0, 0);
+    }
+
+    private static int[] BuildActiveCableIndices(int numCables)
+    {
+        const int maxCables = 8;
+
+        if (numCables < 2 || numCables > maxCables || (numCables % 2) != 0)
+            throw new ArgumentException($"Unsupported cable count: {numCables}. valid options are even counts from 2 to {maxCables}.");
+
+        int cablesPerSide = numCables / 2;
+        if (cablesPerSide > LeftSideSourceIndices.Length || cablesPerSide > RightSideSourceIndices.Length)
+            throw new ArgumentException($"Cable count {numCables} exceeds available side definitions.");
+
+        bool[] selected = new bool[maxCables];
+        for (int i = 0; i < cablesPerSide; i++)
+        {
+            selected[LeftSideSourceIndices[i]] = true;
+            selected[RightSideSourceIndices[i]] = true;
+        }
+
+        int[] active = new int[numCables];
+        int write = 0;
+        for (int src = 0; src < maxCables; src++)
+        {
+            if (selected[src])
+                active[write++] = src;
+        }
+
+        return active;
+    }
+
+    private static (int[] left, int[] right) BuildTrackerSideCableIndices(double3[] localAttachmentPoints)
+    {
+        List<int> left = new List<int>(localAttachmentPoints.Length / 2 + 1);
+        List<int> right = new List<int>(localAttachmentPoints.Length / 2 + 1);
+
+        for (int i = 0; i < localAttachmentPoints.Length; i++)
+        {
+            if (localAttachmentPoints[i].x <= 0.0)
+                left.Add(i);
+            else
+                right.Add(i);
+        }
+
+        return (left.ToArray(), right.ToArray());
     }
 
     /// <summary>

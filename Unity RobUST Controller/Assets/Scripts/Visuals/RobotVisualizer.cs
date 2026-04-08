@@ -10,7 +10,8 @@ public class RobotVisualizer : MonoBehaviour
 
     [Header("Tracker Prefabs")]
     public Transform comTrackerVisual;
-    public Transform endEffectorVisual;
+    public Transform endEffectorLVisual;
+    public Transform endEffectorRVisual;
     public Transform frameTrackerVisual;
     
     [Header("Multi-Camera Setup")]
@@ -43,7 +44,8 @@ public class RobotVisualizer : MonoBehaviour
 
     // -- CACHED DATA --
     private double4x4 _comPose_Robot;
-    private double4x4 _eePose_Robot;
+    private double4x4 _eeLPose_Robot;
+    private double4x4 _eeRPose_Robot;
     private double3 _cop0_Robot;
     private double3 _grf0_Robot;
     private double3 _cop1_Robot;
@@ -56,7 +58,8 @@ public class RobotVisualizer : MonoBehaviour
     {
         // Validation
         if (comTrackerVisual == null ||
-            endEffectorVisual == null ||
+            endEffectorLVisual == null ||
+            endEffectorRVisual == null ||
             frameTrackerVisual == null || 
             perspectiveCamera == null ||
             topViewCamera == null ||
@@ -67,7 +70,8 @@ public class RobotVisualizer : MonoBehaviour
         }
         robot = robotDescription;
         StripPhysics(comTrackerVisual);
-        StripPhysics(endEffectorVisual);
+        StripPhysics(endEffectorLVisual);
+        StripPhysics(endEffectorRVisual);
         StripPhysics(frameTrackerVisual);
         StripPhysics(perspectiveCamera.transform);
         StripPhysics(topViewCamera.transform);
@@ -132,12 +136,13 @@ public class RobotVisualizer : MonoBehaviour
     /// <summary>
     /// Updated API: Accepts double4x4 directly.
     /// </summary>
-    public void PushState(in double4x4 comPose, in double4x4 eePose, in ForcePlateData fp0, in ForcePlateData fp1)
+    public void PushState(in double4x4 comPose, in double4x4 eeLPose, in double4x4 eeRPose, in ForcePlateData fp0, in ForcePlateData fp1)
     {
         lock (dataLock)
         {
             _comPose_Robot = comPose;
-            _eePose_Robot = eePose;
+            _eeLPose_Robot = eeLPose;
+            _eeRPose_Robot = eeRPose;
             _cop0_Robot = fp0.CoP;
             _grf0_Robot = fp0.Force;
             _cop1_Robot = fp1.CoP;
@@ -180,7 +185,7 @@ public class RobotVisualizer : MonoBehaviour
         if (!isInitialized || !isActive) return;
 
         // Local cache vars
-        double4x4 comMat, eeMat;
+        double4x4 comMat, eeLMat, eeRMat;
         double3 cop0, grf0, cop1, grf1;
         Span<double3> goalSnapshot = stackalloc double3[GoalTrajSteps];
 
@@ -188,22 +193,38 @@ public class RobotVisualizer : MonoBehaviour
         {
             // Simple snapshotting - dump latest state
             comMat = _comPose_Robot;
-            eeMat = _eePose_Robot;
+            eeLMat = _eeLPose_Robot;
+            eeRMat = _eeRPose_Robot;
             cop0 = _cop0_Robot;
             grf0 = _grf0_Robot;
             cop1 = _cop1_Robot;
             grf1 = _grf1_Robot;
+
+            for (int i = 0; i < GoalTrajSteps; i++)
+                goalSnapshot[i] = _goalTrajectoryCache[i];
         }
 
         // 1. Cast to float4x4 once (Visuals don't need double precision)
         float4x4 comF = (float4x4)comMat;
-        float4x4 eeF = (float4x4)eeMat;
+        float4x4 eeLF = (float4x4)eeLMat;
+        float4x4 eeRF = (float4x4)eeRMat;
         
         comTrackerVisual.position = (Vector3)RobotToUnityPos(comF.c3.xyz);
         comTrackerVisual.rotation = (Quaternion)RobotToUnityRot(new quaternion(comF));
 
-        endEffectorVisual.position = (Vector3)RobotToUnityPos(eeF.c3.xyz);
-        endEffectorVisual.rotation = (Quaternion)RobotToUnityRot(new quaternion(eeF));
+        double3 barbellCenter = 0.5 * (eeLMat.c3.xyz + eeRMat.c3.xyz);
+        quaternion qL = new quaternion(new float3x3((float3)eeLF.c0.xyz, (float3)eeLF.c1.xyz, (float3)eeLF.c2.xyz));
+        quaternion qR = new quaternion(new float3x3((float3)eeRF.c0.xyz, (float3)eeRF.c1.xyz, (float3)eeRF.c2.xyz));
+        if (math.dot(qL.value, qR.value) < 0f)
+            qR.value = -qR.value;
+        quaternion barbellRot = math.normalize(new quaternion(qL.value + qR.value));
+
+        endEffectorLVisual.position = (Vector3)RobotToUnityPos((float3)barbellCenter);
+        endEffectorLVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
+
+        
+        endEffectorRVisual.position = (Vector3)RobotToUnityPos((float3)barbellCenter);
+        endEffectorRVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
         
         // Frame (Always Origin)
         frameTrackerVisual.localPosition = Vector3.zero; 

@@ -70,6 +70,34 @@ public class DataLogger
         _cursor++;
     }
 
+    public void Log(long timestamp_tick, in double4x4 comPose, in double4x4 eePoseL, in double4x4 eePoseR,
+                    in ForcePlateData fp1, in ForcePlateData fp2,
+                    in Wrench goalWrench, in RBState goalState)
+    {
+        double4x4 eePose = BuildMidpointPose(eePoseL, eePoseR);
+        Log(timestamp_tick, comPose, eePose, fp1, fp2, goalWrench, goalState);
+    }
+
+    private static double4x4 BuildMidpointPose(in double4x4 poseL, in double4x4 poseR)
+    {
+        double3 centerPos = 0.5 * (poseL.c3.xyz + poseR.c3.xyz);
+
+        quaternion qL = new quaternion(new float3x3((float3)poseL.c0.xyz, (float3)poseL.c1.xyz, (float3)poseL.c2.xyz));
+        quaternion qR = new quaternion(new float3x3((float3)poseR.c0.xyz, (float3)poseR.c1.xyz, (float3)poseR.c2.xyz));
+        if (math.dot(qL.value, qR.value) < 0f)
+            qR.value = -qR.value;
+
+        quaternion qMid = math.normalize(new quaternion(qL.value + qR.value));
+        float3x3 rMid = new float3x3(qMid);
+
+        return new double4x4(
+            new double4(rMid.c0.x, rMid.c0.y, rMid.c0.z, 0.0),
+            new double4(rMid.c1.x, rMid.c1.y, rMid.c1.z, 0.0),
+            new double4(rMid.c2.x, rMid.c2.y, rMid.c2.z, 0.0),
+            new double4(centerPos, 1.0)
+        );
+    }
+
     /// <summary>
     /// Flushes the internal buffer to a CSV file.
     /// Warning: This allocates memory for string building and performs File I/O.

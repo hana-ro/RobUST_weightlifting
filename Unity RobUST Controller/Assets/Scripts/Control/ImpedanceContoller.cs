@@ -41,13 +41,15 @@ public class ImpedanceController : BaseController<Wrench>
     /// Updates the controller with the latest sensor data and target state.
     /// Call this immediately before computeNextControl().
     /// </summary>
-    /// <param name="pose_RF">Current End-Effector pose in Robot Frame</param>
+    /// <param name="poseL_RF">Current Left End-Effector pose in Robot Frame</param>
+    /// <param name="poseR_RF">Current Right End-Effector pose in Robot Frame</param>
     /// <param name="linVel_RF">Current Linear Velocity in Robot Frame [m/s]</param>
     /// <param name="angVel_RF">Current Angular Velocity in Robot Frame [rad/s]</param>
     /// <param name="target">The desired state (Position, Euler ZYX, Velocities)</param>
-    public void UpdateState(double4x4 pose_RF, double3 linVel_RF, double3 angVel_RF, RBState target)
+    public void UpdateState(double4x4 poseL_RF, double4x4 poseR_RF, double3 linVel_RF, double3 angVel_RF, RBState target)
     {
-        currentPose = pose_RF;
+        currentPose = BuildBarbellPose(poseL_RF, poseR_RF);
+    
         currentLinVel = linVel_RF;
         currentAngVel = angVel_RF;
         targetState = target;
@@ -101,5 +103,26 @@ public class ImpedanceController : BaseController<Wrench>
         if (math.length(TorqueCmd) > MaxTorque) TorqueCmd = math.normalize(TorqueCmd) * MaxTorque;
 
         return new Wrench(ForceCmd, TorqueCmd);
+    }
+
+    private static double4x4 BuildBarbellPose(double4x4 poseL_RF, double4x4 poseR_RF)
+    {
+        double3 centerPosition = 0.5 * (poseL_RF.c3.xyz + poseR_RF.c3.xyz);
+
+        quaternion qL = new quaternion(new float3x3((float3)poseL_RF.c0.xyz, (float3)poseL_RF.c1.xyz, (float3)poseL_RF.c2.xyz));
+        quaternion qR = new quaternion(new float3x3((float3)poseR_RF.c0.xyz, (float3)poseR_RF.c1.xyz, (float3)poseR_RF.c2.xyz));
+
+        if (math.dot(qL.value, qR.value) < 0f)
+            qR.value = -qR.value;
+
+        quaternion averageOrientation = math.normalize(new quaternion(qL.value + qR.value));
+        float3x3 rotation = new float3x3(averageOrientation);
+
+        return new double4x4(
+            new double4(rotation.c0.x, rotation.c0.y, rotation.c0.z, 0.0),
+            new double4(rotation.c1.x, rotation.c1.y, rotation.c1.z, 0.0),
+            new double4(rotation.c2.x, rotation.c2.y, rotation.c2.z, 0.0),
+            new double4(centerPosition, 1.0)
+        );
     }
 }

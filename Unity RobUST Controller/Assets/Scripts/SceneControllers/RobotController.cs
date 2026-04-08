@@ -172,9 +172,11 @@ public class RobotController : MonoBehaviour
             s_IntervalNs.Value = (long)((loopStartTick - lastLoopTick) * ticksToNs);
             lastLoopTick = loopStartTick;
 
-            trackerManager.GetEndEffectorTrackerData(out TrackerData rawEndEffectorData);
+            trackerManager.GetEndEffectorLeftTrackerData(out TrackerData rawEndEffectorLeftData);
+            trackerManager.GetEndEffectorRightTrackerData(out TrackerData rawEndEffectorRightData);
             trackerManager.GetCoMTrackerData(out TrackerData rawComData);
-            double4x4 eePose_RF = math.mul(frameInv, ToDouble4x4(rawEndEffectorData.PoseMatrix));
+            double4x4 eePoseL_RF = math.mul(frameInv, ToDouble4x4(rawEndEffectorLeftData.PoseMatrix));
+            double4x4 eePoseR_RF = math.mul(frameInv, ToDouble4x4(rawEndEffectorRightData.PoseMatrix));
             double4x4 comPose_RF = math.mul(frameInv, ToDouble4x4(rawComData.PoseMatrix));
 
             // Debug.Log($"comPose_RF: {comPose_RF.c3}");
@@ -188,7 +190,7 @@ public class RobotController : MonoBehaviour
                 netCoP = (fp0.CoP * fp0.Force.z + fp1.CoP * fp1.Force.z) / netForce.z;
             ForcePlateData netFPData = new ForcePlateData(netForce, netCoP);
             
-            filter_10Hz.Update(comPose_RF, eePose_RF, netFPData);
+            filter_10Hz.Update(comPose_RF, eePoseL_RF, eePoseR_RF, netFPData);
 
             switch (currentControlMode)
             {
@@ -201,7 +203,7 @@ public class RobotController : MonoBehaviour
                     {
                         case 8:
                             Wrench zeroWrench = new Wrench(double3.zero, double3.zero);
-                            solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, zeroWrench);
+                            solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, zeroWrench);
                             MapTensionsToMotors(solver_tensions, motor_tension_command);
                             break;
                         case 4:
@@ -222,19 +224,19 @@ public class RobotController : MonoBehaviour
                     
                     Xref_horizon.Fill(staticPoint);
 
-                    impedanceController.UpdateState(eePose_RF, filter_10Hz.EELinearVelocity, filter_10Hz.EEAngularVelocity, staticPoint);
+                    impedanceController.UpdateState(eePoseL_RF, eePoseR_RF, filter_10Hz.EELinearVelocity, filter_10Hz.EEAngularVelocity, staticPoint);
                     Wrench goalWrench = impedanceController.computeNextControl();
-                    solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, goalWrench);
+                    solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
                     break;
             }
             tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
-            visualizer.PushState(comPose_RF, eePose_RF, fp0, fp1);
+            visualizer.PushState(comPose_RF, eePoseL_RF, eePoseR_RF, fp0, fp1);
             if (isLogging)
             {
-                Wrench goalWrench = tensionPlanner.CalculateResultantWrench(eePose_RF, solver_tensions);
-                dataLogger.Log(loopStartTick, comPose_RF, eePose_RF, fp0, fp1, goalWrench, Xref_horizon[0]);
+                Wrench goalWrench = tensionPlanner.CalculateResultantWrench(eePoseL_RF, eePoseR_RF, solver_tensions);
+                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp0, fp1, goalWrench, Xref_horizon[0]);
             }
 
             s_WorkloadNs.Value = (long)((System.Diagnostics.Stopwatch.GetTimestamp() - loopStartTick) * ticksToNs);
