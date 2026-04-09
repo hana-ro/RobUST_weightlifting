@@ -40,10 +40,38 @@ public class RobotController : MonoBehaviour
     private bool isForcePlateEnabled = true;
 
     [Header("PID Target")]
-    [Tooltip("Relative vertical target offset when entering PID mode. Robot frame Y is up in this project.")]
-    [SerializeField] private float pidVerticalOffsetMeters = 0.3f;
+    [Tooltip("Relative position offset when entering PID mode in robot frame [m]. X=forward, Y=up, Z=lateral.")]
+    [SerializeField] private Vector3 pidPositionOffsetMeters = new Vector3(0.0f, 0.3f, 0.0f);
 
-    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, PID }
+    [Header("Vertical Trajectory")]
+    [Tooltip("Vertical lift amplitude [m] around the captured PID target.")]
+    [SerializeField] private float trajectoryLiftHeightMeters = 0.20f;
+    [Tooltip("Time [s] to move from bottom to top (and top to bottom).")]
+    [SerializeField] private float trajectoryMoveDurationSec = 4.0f;
+    [Tooltip("Pause time [s] at the top and bottom of the trajectory.")]
+    [SerializeField] private float trajectoryPauseDurationSec = 1.0f;
+
+    [Header("Tension Mode")]
+    [Tooltip("Constant Cartesian force target in robot frame [N] used in TENSION mode.")]
+    [SerializeField] private Vector3 tensionModeForceN = new Vector3(0.0f, 0.0f, 0.0f);
+    [Tooltip("Constant Cartesian torque target in robot frame [N*m] used in TENSION mode.")]
+    [SerializeField] private Vector3 tensionModeTorqueNm = new Vector3(0.0f, 0.0f, 0.0f);
+    [Tooltip("Enable smooth ramp-in when entering TENSION mode.")]
+    [SerializeField] private bool tensionModeRampEnabled = true;
+    [Tooltip("Ramp-in duration [s] for TENSION mode wrench target.")]
+    [SerializeField] private float tensionModeRampDurationSec = 1.5f;
+    [Tooltip("Enable force closed-loop in TENSION mode using force plate net force.")]
+    [SerializeField] private bool tensionModeClosedLoopEnabled = true;
+    public enum TensionFeedbackSource { OFF, FORCE_PLATE, ESTIMATED_WRENCH }
+    [Tooltip("Feedback source for TENSION closed-loop. ESTIMATED_WRENCH uses planner-estimated resultant wrench from previous cycle.")]
+    [SerializeField] private TensionFeedbackSource tensionFeedbackSource = TensionFeedbackSource.ESTIMATED_WRENCH;
+    // Closed-loop gains are code-only to avoid runtime inspector retuning.
+    private readonly Vector3 tensionModeForceKp = new Vector3(0.2f, 0.2f, 0.2f);
+    private readonly Vector3 tensionModeForceKi = new Vector3(0.05f, 0.05f, 0.05f);
+    private readonly Vector3 tensionModeForceIntegralLimit = new Vector3(120.0f, 120.0f, 120.0f);
+    private readonly float tensionModeMaxForceCorrectionN = 120.0f;
+
+    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, PID, TENSION }
     [SerializeField] private volatile CONTROL_MODE currentControlMode = CONTROL_MODE.OFF;
     private CONTROL_MODE previousControlMode = CONTROL_MODE.OFF;
 
@@ -69,7 +97,9 @@ public class RobotController : MonoBehaviour
     // Controllers
     private ImpedanceController impedanceController;
     private PIDController pidController;
+    private TensionController tensionController;
     private CableTensionPlanner tensionPlanner;
+    private TrajectoryPlanner trajectoryPlanner;
 
     // Static frame reference captured only at startup to prevent drift
     private TrackerData robot_frame_tracker;
@@ -77,6 +107,8 @@ public class RobotController : MonoBehaviour
     private volatile bool isRunning = false;
     private volatile bool isTrajectoryActive = false;
     private volatile bool pidRecaptureRequested = false;
+    private volatile bool trajectoryRestartRequested = false;
+    private volatile bool tensionModeRampRestartRequested = false;
     private bool pidTargetCaptured = false;
     private RBState pidCapturedTarget;
 
@@ -145,7 +177,9 @@ public class RobotController : MonoBehaviour
         // Finally Initialize Controller modules and begin control thread
         impedanceController = new ImpedanceController(userMass);
         pidController = new PIDController(userMass);
+        tensionController = new TensionController();
         tensionPlanner = new CableTensionPlanner(robotDescription);
+        trajectoryPlanner = new TrajectoryPlanner();
         
         controllerThread = new Thread(controlLoop)
         {
@@ -161,13 +195,28 @@ public class RobotController : MonoBehaviour
     private void Update()
     {
         if (Keyboard.current == null) return;
-        if (Keyboard.current.spaceKey.wasPressedThisFrame) { isTrajectoryActive = !isTrajectoryActive; }
+        if (Keyboard.current.spaceKey.wasPressedThisFrame)
+        {
+            isTrajectoryActive = !isTrajectoryActive;
+            if (isTrajectoryActive)
+                trajectoryRestartRequested = true;
+        }
         if (Keyboard.current.oKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.OFF; isTrajectoryActive = false; }
-        if (Keyboard.current.tKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.TRANSPARENT; }
+        if (Keyboard.current.tKey.wasPressedThisFrame)
+        { 
+            currentControlMode = CONTROL_MODE.TRANSPARENT; 
+            isTrajectoryActive = false; 
+        }
         if (Keyboard.current.pKey.wasPressedThisFrame)
         {
             currentControlMode = CONTROL_MODE.PID;
             pidRecaptureRequested = true;
+        }
+        if (Keyboard.current.yKey.wasPressedThisFrame)
+        {
+            currentControlMode = CONTROL_MODE.TENSION;
+            isTrajectoryActive = false;
+            tensionModeRampRestartRequested = true;
         }
     }
 
@@ -202,12 +251,18 @@ public class RobotController : MonoBehaviour
                 pidController?.Reset();
                 pidTargetCaptured = false;
                 pidRecaptureRequested = false;
+                trajectoryRestartRequested = true;
             }
 
             if (currentControlMode != previousControlMode)
             {
                 pidController?.Reset();
+                tensionController?.Reset();
+                // Reset tension planner history to prevent jerks from stale warm-starts
+                tensionPlanner?.Reset();
                 pidTargetCaptured = false;
+                trajectoryRestartRequested = true;
+                tensionModeRampRestartRequested = currentControlMode == CONTROL_MODE.TENSION;
                 previousControlMode = currentControlMode;
             }
 
@@ -226,9 +281,14 @@ public class RobotController : MonoBehaviour
 
             // Debug.Log($"comPose_RF: {comPose_RF.c3}");
 
-            // FP already in robot frame
-            forcePlateManager.GetForcePlateData(0, out ForcePlateData fp0);
-            forcePlateManager.GetForcePlateData(1, out ForcePlateData fp1);
+            // FP already in robot frame (fallback to zero when force plates are unavailable)
+            ForcePlateData fp0 = new ForcePlateData(double3.zero, double3.zero);
+            ForcePlateData fp1 = new ForcePlateData(double3.zero, double3.zero);
+            if (isForcePlateEnabled)
+            {
+                forcePlateManager.GetForcePlateData(0, out fp0);
+                forcePlateManager.GetForcePlateData(1, out fp1);
+            }
             double3 netForce = fp0.Force + fp1.Force;
             double3 netCoP = double3.zero;
             if (math.abs(netForce.z) > 1e-3) // Handle division by zero
@@ -236,6 +296,27 @@ public class RobotController : MonoBehaviour
             ForcePlateData netFPData = new ForcePlateData(netForce, netCoP);
             
             filter_10Hz.Update(comPose_RF, eePose_RF, netFPData);
+
+            double3 tensionFeedbackForce = double3.zero;
+            bool hasTensionFeedbackForce = false;
+            if (tensionModeClosedLoopEnabled)
+            {
+                switch (tensionFeedbackSource)
+                {
+                    case TensionFeedbackSource.FORCE_PLATE:
+                        if (isForcePlateEnabled)
+                        {
+                            tensionFeedbackForce = netFPData.Force;
+                            hasTensionFeedbackForce = true;
+                        }
+                        break;
+                    case TensionFeedbackSource.ESTIMATED_WRENCH:
+                        Wrench estimatedWrench = tensionPlanner.CalculateResultantWrench(eePose_RF, solver_tensions);
+                        tensionFeedbackForce = estimatedWrench.Force;
+                        hasTensionFeedbackForce = true;
+                        break;
+                }
+            }
 
             switch (currentControlMode)
             {
@@ -279,26 +360,83 @@ public class RobotController : MonoBehaviour
                     if (!pidTargetCaptured)
                     {
                         double3 currentPos = eePose_RF.c3.xyz;
-                        double3 targetPos = currentPos + new double3(0.0, pidVerticalOffsetMeters, 0.0);
+                        double3 targetPos = currentPos + new double3(
+                            pidPositionOffsetMeters.x,
+                            pidPositionOffsetMeters.y,
+                            pidPositionOffsetMeters.z
+                        );
+
                         double3 currentEulerZYX = RotationToEulerZYX(eePose_RF);
                         pidCapturedTarget = new RBState(targetPos, currentEulerZYX, double3.zero, double3.zero);
+                        trajectoryPlanner.Configure(trajectoryLiftHeightMeters, trajectoryMoveDurationSec, trajectoryPauseDurationSec, ctrl_freq);
+                        trajectoryPlanner.Reset(pidCapturedTarget);
                         pidTargetCaptured = true;
-                        Debug.Log($"PID target captured: current EE + {pidVerticalOffsetMeters:F3} m on +Y (vertical).");
+                        Debug.Log($"PID target captured: current EE + offset ({pidPositionOffsetMeters.x:F3}, {pidPositionOffsetMeters.y:F3}, {pidPositionOffsetMeters.z:F3}) m. Vertical trajectory lift={trajectoryLiftHeightMeters:F3} m.");
                     }
 
-                    Xref_horizon.Fill(pidCapturedTarget);
+                    if (trajectoryRestartRequested)
+                    {
+                        trajectoryPlanner.Configure(trajectoryLiftHeightMeters, trajectoryMoveDurationSec, trajectoryPauseDurationSec, ctrl_freq);
+                        trajectoryPlanner.Reset(pidCapturedTarget);
+                        trajectoryRestartRequested = false;
+                    }
+
+                    RBState pidTarget = trajectoryPlanner.GetReference(isTrajectoryActive);
+                    Xref_horizon.Fill(pidTarget);
 
                     pidController.UpdateState(
                         eePose_RF,
                         filter_10Hz.EELinearVelocity,
                         filter_10Hz.EEAngularVelocity,
-                        pidCapturedTarget,
+                        pidTarget,
                         1.0 / ctrl_freq
                     );
 
                     Wrench pidGoalWrench = pidController.computeNextControl();
                     solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, pidGoalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
+                    break;
+                case CONTROL_MODE.TENSION:
+                    Wrench targetTensionWrench = new Wrench(
+                        new double3(tensionModeForceN.x, tensionModeForceN.y, tensionModeForceN.z),
+                        new double3(tensionModeTorqueNm.x, tensionModeTorqueNm.y, tensionModeTorqueNm.z)
+                    );
+
+                    tensionController.Configure(tensionModeRampEnabled, tensionModeRampDurationSec);
+                    tensionController.ConfigureClosedLoop(
+                        tensionModeClosedLoopEnabled && hasTensionFeedbackForce,
+                        new double3(tensionModeForceKp.x, tensionModeForceKp.y, tensionModeForceKp.z),
+                        new double3(tensionModeForceKi.x, tensionModeForceKi.y, tensionModeForceKi.z),
+                        new double3(tensionModeForceIntegralLimit.x, tensionModeForceIntegralLimit.y, tensionModeForceIntegralLimit.z),
+                        tensionModeMaxForceCorrectionN
+                    );
+                    if (hasTensionFeedbackForce)
+                        tensionController.UpdateMeasuredForce(tensionFeedbackForce);
+
+                    if (tensionModeRampRestartRequested)
+                    {
+                        tensionController.EnterMode(targetTensionWrench);
+                        tensionModeRampRestartRequested = false;
+                    }
+                    else
+                    {
+                        tensionController.UpdateTarget(targetTensionWrench);
+                    }
+
+                    tensionController.Step(1.0 / ctrl_freq);
+                    Wrench tensionModeWrench = tensionController.computeNextControl();
+
+                    solver_tensions = tensionPlanner.CalculateTensions(eePose_RF, tensionModeWrench);
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+
+                    RBState holdState = new RBState(
+                        eePose_RF.c3.xyz,
+                        RotationToEulerZYX(eePose_RF),
+                        double3.zero,
+                        double3.zero
+                    );
+                    Xref_horizon.Fill(holdState);
                     visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
                     break;
             }

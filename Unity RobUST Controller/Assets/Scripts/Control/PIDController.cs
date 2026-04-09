@@ -92,17 +92,14 @@ public class PIDController : BaseController<Wrench>
         quaternion qDes = math.mul(qz, math.mul(qy, qx));
 
         quaternion qCurr = new quaternion(new float3x3((float3)currentPose.c0.xyz, (float3)currentPose.c1.xyz, (float3)currentPose.c2.xyz));
-        quaternion qDiff = math.mul(qDes, math.inverse(qCurr));
+        quaternion qDiff = math.normalize(math.mul(qDes, math.inverse(qCurr)));
 
-        double3 eOri = double3.zero;
-        double wClamped = math.clamp(qDiff.value.w, -1.0f, 1.0f);
-        if (math.abs(wClamped) < 0.999999)
-        {
-            double theta = 2.0 * math.acos(wClamped);
-            double sinHalfTheta = math.sqrt(1.0 - wClamped * wClamped);
-            if (sinHalfTheta > 0.001)
-                eOri = ((double3)qDiff.value.xyz / sinHalfTheta) * theta;
-        }
+        // Ensure shortest-arc quaternion error and preserve small-angle corrections.
+        if (qDiff.value.w < 0f)
+            qDiff.value = -qDiff.value;
+
+        float3 qv = qDiff.value.xyz;
+        double3 eOri = 2.0 * (double3)qv;
 
         double3 eAngVel = targetState.w - currentAngVel;
         oriIntegral = ClampPerAxis(oriIntegral + (eOri * dt), -OriIntegralLimit, OriIntegralLimit);

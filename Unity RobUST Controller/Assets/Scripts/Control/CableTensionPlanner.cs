@@ -75,11 +75,37 @@ public class CableTensionPlanner
             previousSolution[i] = 10.0;
         
         // initialize qp solver
-        alglib.minqpcreate(numCables, out qpState); // Initialize QP state once and reuse it for subsequent solves
-        alglib.minqpsetalgodenseipm(qpState, 1e-6);  // Stopping tolerance: 1e-6
+        InitializeSolver();
+    }
+
+    /// <summary>
+    /// Resets the planner state, clearing previous solutions and full ALGLIB solver state.
+    /// Call this when switching control modes to avoid "jumps" from stale solutions.
+    /// This performs a deeper reset than just modifying the start point, to clear internal solver heuristics.
+    /// </summary>
+    public void Reset()
+    {
+        // 1. Reset previous solution to minimum tension to provide a safe "fresh" start
+        for (int i = 0; i < robot.NumCables; i++)
+        {
+            previousSolution[i] = minTension;
+        }
+
+        // 2. Fully re-initialize the ALGLIB solver object to clear any internal scaling/barriers
+        //    that might have accumulated from previous runs at different operating points.
+        //    Note: This does allocate, but Reset() is only called on mode switches, not per-frame.
+        InitializeSolver();
+    }
+
+    private void InitializeSolver()
+    {
+        int numCables = robot.NumCables;
+        alglib.minqpcreate(numCables, out qpState); 
+        alglib.minqpsetalgodenseipm(qpState, 1e-6); 
         alglib.minqpsetquadraticterm(qpState, quadratic, true);
         alglib.minqpsetlinearterm(qpState, linear);
         alglib.minqpsetbc(qpState, tensionLower, tensionUpper);
+        alglib.minqpsetstartingpoint(qpState, previousSolution);
     }
 
     /// <summary>
@@ -96,7 +122,7 @@ public class CableTensionPlanner
         for (int i = 0; i < numCables; i++)
         {
             // Transform attachment point to robot frame
-            double3 attachLocal = robot.LocalAttachmentPoints[i];
+            double3 attachLocal = robot.LocalAttachmentP0oints[i];
             double3 attachRobotFrame = TransformPoint(eeInRobotFrame, attachLocal);
 
             // Calculate cable direction vector (pulley - attachment)

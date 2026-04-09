@@ -4,6 +4,7 @@ using Unity.Profiling;
 using System;
 using System.Net.Sockets;
 using System.Threading;
+
 using System.Diagnostics;
 
 /// <summary>
@@ -149,6 +150,7 @@ public class LabviewTcpCommunicator : MonoBehaviour
             try
             {
                 networkStream.Write(sendBuffer, 0, bytesToSend);
+                networkStream.Flush(); // Force send immediately
             }
             catch (Exception)
             {

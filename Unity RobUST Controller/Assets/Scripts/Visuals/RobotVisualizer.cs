@@ -193,6 +193,10 @@ public class RobotVisualizer : MonoBehaviour
             grf0 = _grf0_Robot;
             cop1 = _cop1_Robot;
             grf1 = _grf1_Robot;
+
+            // Copy the latest goal trajectory atomically with tracker/force data.
+            for (int i = 0; i < GoalTrajSteps; i++)
+                goalSnapshot[i] = _goalTrajectoryCache[i];
         }
 
         // 1. Cast to float4x4 once (Visuals don't need double precision)
