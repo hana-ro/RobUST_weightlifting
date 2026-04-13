@@ -16,6 +16,9 @@ public class TrackerManager : MonoBehaviour
     static readonly ProfilerCounterValue<long> s_IntervalNs = new(RobotProfiler.Intervals, "Tracker Manager Interval", ProfilerMarkerDataUnit.TimeNanoseconds);
 
     [Header("Tracker Serial Numbers")]
+    [Tooltip("If disabled, CoM tracker is treated as optional and will not block initialization.")]
+    [SerializeField] private bool enableCoMTracker = true;
+
     [Tooltip("Serial number for the Center of Mass (CoM) tracker.")]
     public string comTrackerSerial = "LHR-FFFFFFFF"; 
 
@@ -97,6 +100,11 @@ public class TrackerManager : MonoBehaviour
     {
         comTrackerIndex = endEffectorLeftIndex = endEffectorRightIndex = frameTrackerIndex = OpenVR.k_unTrackedDeviceIndexInvalid;
         var buffer = new System.Text.StringBuilder((int)OpenVR.k_unMaxPropertyStringSize);
+
+        if (!enableCoMTracker)
+        {
+            Debug.Log("CoM tracker is disabled in TrackerManager settings. Initializing with 3 required trackers.");
+        }
         
         for (uint deviceId = 0; deviceId < OpenVR.k_unMaxTrackedDeviceCount; deviceId++)
         {
@@ -112,7 +120,7 @@ public class TrackerManager : MonoBehaviour
             string serial = buffer.ToString();
             Debug.Log($"Discovered tracker - Device: {deviceId}, Serial: {serial}");
 
-            if (string.Equals(serial, comTrackerSerial, StringComparison.OrdinalIgnoreCase))
+            if (enableCoMTracker && string.Equals(serial, comTrackerSerial, StringComparison.OrdinalIgnoreCase))
             {
                 comTrackerIndex = deviceId;
                 Debug.Log($"--> Matched CoM tracker: {serial}");
@@ -136,7 +144,7 @@ public class TrackerManager : MonoBehaviour
 
         // Validate all trackers were found
         bool valid = true;
-        if (comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
+        if (enableCoMTracker && comTrackerIndex == OpenVR.k_unTrackedDeviceIndexInvalid)
         {
             Debug.LogError($"CoM tracker '{comTrackerSerial}' not found.", this);
             valid = false;

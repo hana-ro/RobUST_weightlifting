@@ -7,6 +7,8 @@ public class RobotVisualizer : MonoBehaviour
     [Header("General Settings")]
     [Tooltip("Toggle to enable/disable Robot visualization.")]
     public bool isActive = true;
+    [Tooltip("When enabled, show two additional coordinate frames for left/right end-effectors while keeping the barbell frame.")]
+    public bool showIndividualEndEffectorFrames = false;
 
     [Header("Tracker Prefabs")]
     public Transform comTrackerVisual;
@@ -38,6 +40,8 @@ public class RobotVisualizer : MonoBehaviour
     private Transform grf0Capsule;
     private Transform grf1Capsule;
     private Transform[] goalTrajectorySpheres;
+    private Transform endEffectorLIndividualVisual;
+    private Transform endEffectorRIndividualVisual;
 
     // -- Thread Safety --
     private readonly object dataLock = new object();
@@ -88,6 +92,7 @@ public class RobotVisualizer : MonoBehaviour
         GeneratePulleyVisuals(root);
         GenerateForcePlateVisual(root);
         GenerateGoalTrajectoryVisuals(root);
+        CreateIndividualEndEffectorVisuals(root);
 
         ConfigureSplitScreen();
 
@@ -225,6 +230,29 @@ public class RobotVisualizer : MonoBehaviour
         
         endEffectorRVisual.position = (Vector3)RobotToUnityPos((float3)barbellCenter);
         endEffectorRVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
+
+        bool showIndividual = showIndividualEndEffectorFrames;
+        if (endEffectorLIndividualVisual != null)
+        {
+            if (endEffectorLIndividualVisual.gameObject.activeSelf != showIndividual)
+                endEffectorLIndividualVisual.gameObject.SetActive(showIndividual);
+            if (showIndividual)
+            {
+                endEffectorLIndividualVisual.position = (Vector3)RobotToUnityPos(eeLF.c3.xyz);
+                endEffectorLIndividualVisual.rotation = (Quaternion)RobotToUnityRot(new quaternion(eeLF));
+            }
+        }
+
+        if (endEffectorRIndividualVisual != null)
+        {
+            if (endEffectorRIndividualVisual.gameObject.activeSelf != showIndividual)
+                endEffectorRIndividualVisual.gameObject.SetActive(showIndividual);
+            if (showIndividual)
+            {
+                endEffectorRIndividualVisual.position = (Vector3)RobotToUnityPos(eeRF.c3.xyz);
+                endEffectorRIndividualVisual.rotation = (Quaternion)RobotToUnityRot(new quaternion(eeRF));
+            }
+        }
         
         // Frame (Always Origin)
         frameTrackerVisual.localPosition = Vector3.zero; 
@@ -378,6 +406,19 @@ public class RobotVisualizer : MonoBehaviour
             sphere.transform.position = Vector3.zero;
             goalTrajectorySpheres[i] = sphere.transform;
         }
+    }
+
+    private void CreateIndividualEndEffectorVisuals(Transform root)
+    {
+        endEffectorLIndividualVisual = Instantiate(endEffectorLVisual, root);
+        endEffectorLIndividualVisual.name = "EndEffectorL_Individual";
+        StripPhysics(endEffectorLIndividualVisual);
+        endEffectorLIndividualVisual.gameObject.SetActive(false);
+
+        endEffectorRIndividualVisual = Instantiate(endEffectorRVisual, root);
+        endEffectorRIndividualVisual.name = "EndEffectorR_Individual";
+        StripPhysics(endEffectorRIndividualVisual);
+        endEffectorRIndividualVisual.gameObject.SetActive(false);
     }
 
     private void StripPhysics(Transform root)

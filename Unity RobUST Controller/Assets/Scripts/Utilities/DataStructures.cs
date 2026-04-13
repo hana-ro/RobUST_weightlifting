@@ -84,3 +84,53 @@ public abstract class BaseController<T>
 {
     public abstract T computeNextControl();
 }
+
+/// <summary>
+/// Builds a robust midpoint/barbell pose from left and right end-effector poses.
+/// Uses the left-right position baseline as the primary lateral axis and a pose-derived
+/// up hint to avoid sudden quaternion averaging flips.
+/// </summary>
+public static class PoseFusion
+{
+    private const float MinBaseline = 1e-5f;
+
+    public static double4x4 BuildBarbellPose(double4x4 poseL, double4x4 poseR)
+    {
+        double3 center = 0.5 * (poseL.c3.xyz + poseR.c3.xyz);
+
+        float3 pL = (float3)poseL.c3.xyz;
+        float3 pR = (float3)poseR.c3.xyz;
+        float3 baseline = pR - pL;
+
+        float3 axisY;
+        if (math.lengthsq(baseline) > MinBaseline)
+        {
+            axisY = math.normalize(baseline);
+        }
+        else
+        {
+            axisY = new float3(0f, 1f, 0f);
+        }
+
+        // Robot frame convention: +Z is vertical.
+        float3 worldUp = new float3(0f, 0f, 1f);
+        float3 axisZ = worldUp - math.dot(worldUp, axisY) * axisY;
+        if (math.lengthsq(axisZ) < MinBaseline)
+        {
+            // If baseline becomes near-vertical, choose a stable fallback axis.
+            float3 fallback = math.abs(axisY.x) < 0.9f ? new float3(1f, 0f, 0f) : new float3(0f, 1f, 0f);
+            axisZ = fallback - math.dot(fallback, axisY) * axisY;
+        }
+        axisZ = math.normalize(axisZ);
+
+        float3 axisX = math.normalize(math.cross(axisY, axisZ));
+        axisZ = math.normalize(math.cross(axisX, axisY));
+
+        return new double4x4(
+            new double4(axisX.x, axisX.y, axisX.z, 0.0),
+            new double4(axisY.x, axisY.y, axisY.z, 0.0),
+            new double4(axisZ.x, axisZ.y, axisZ.z, 0.0),
+            new double4(center, 1.0)
+        );
+    }
+}

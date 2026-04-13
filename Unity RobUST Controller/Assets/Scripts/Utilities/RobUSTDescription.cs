@@ -89,7 +89,9 @@ public sealed class RobUSTDescription
         // Determine active subset based on requested numCables
         int[] activeIndices = BuildActiveCableIndices(numCables);
 
-        double halfML = chestML / 2.0;
+        // Temporary simplification: one estimated attachment point per tracker side.
+        const double leftAttachmentOffsetY = 0.085;
+        const double rightAttachmentOffsetY = -0.085;
         
         // Populate arrays based on active indices
         for (int i = 0; i < numCables; i++)
@@ -98,16 +100,24 @@ public sealed class RobUSTDescription
             
             FramePulleyPositions[i] = AllPulleyPositions[srcIdx];
             SolverToMotorMap[i] = FullMotorMapping[srcIdx];
-            
-            if (srcIdx == 0 || srcIdx == 4) LocalAttachmentPoints[i] = new double3(-halfML, -chestAP, 0);
-            else if (srcIdx == 1 || srcIdx == 5) LocalAttachmentPoints[i] = new double3(halfML, -chestAP, 0);
-            else if (srcIdx == 2 || srcIdx == 6) LocalAttachmentPoints[i] = new double3(halfML, 0, 0);
-            else if (srcIdx == 3 || srcIdx == 7) LocalAttachmentPoints[i] = new double3(-halfML, 0, 0);
+
+            if (IsLeftSideSourceIndex(srcIdx))
+            {
+                LocalAttachmentPoints[i] = new double3(0.0, leftAttachmentOffsetY, 0.0);
+            }
+            else if (IsRightSideSourceIndex(srcIdx))
+            {
+                LocalAttachmentPoints[i] = new double3(0.0, rightAttachmentOffsetY, 0.0);
+            }
+            else
+            {
+                throw new ArgumentException($"Unknown source cable index: {srcIdx}");
+            }
         }
 
-        (LeftCableIndices, RightCableIndices) = BuildTrackerSideCableIndices(LocalAttachmentPoints);
+        (LeftCableIndices, RightCableIndices) = BuildTrackerSideCableIndices(activeIndices);
 
-        BarbellCenter_EE_Frame = new double3(0, -chestAP / 2.0, 0);
+        //BarbellCenter_EE_Frame = new double3(0, -chestAP / 2.0, 0);
     }
 
     private static int[] BuildActiveCableIndices(int numCables)
@@ -139,20 +149,45 @@ public sealed class RobUSTDescription
         return active;
     }
 
-    private static (int[] left, int[] right) BuildTrackerSideCableIndices(double3[] localAttachmentPoints)
+    private static (int[] left, int[] right) BuildTrackerSideCableIndices(int[] activeIndices)
     {
-        List<int> left = new List<int>(localAttachmentPoints.Length / 2 + 1);
-        List<int> right = new List<int>(localAttachmentPoints.Length / 2 + 1);
+        List<int> left = new List<int>(activeIndices.Length / 2 + 1);
+        List<int> right = new List<int>(activeIndices.Length / 2 + 1);
 
-        for (int i = 0; i < localAttachmentPoints.Length; i++)
+        for (int i = 0; i < activeIndices.Length; i++)
         {
-            if (localAttachmentPoints[i].x <= 0.0)
+            int sourceIndex = activeIndices[i];
+            if (IsLeftSideSourceIndex(sourceIndex))
                 left.Add(i);
-            else
+            else if (IsRightSideSourceIndex(sourceIndex))
                 right.Add(i);
+            else
+                throw new ArgumentException($"Unknown source cable index: {sourceIndex}");
         }
 
         return (left.ToArray(), right.ToArray());
+    }
+
+    private static bool IsLeftSideSourceIndex(int sourceIndex)
+    {
+        for (int i = 0; i < LeftSideSourceIndices.Length; i++)
+        {
+            if (LeftSideSourceIndices[i] == sourceIndex)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsRightSideSourceIndex(int sourceIndex)
+    {
+        for (int i = 0; i < RightSideSourceIndices.Length; i++)
+        {
+            if (RightSideSourceIndices[i] == sourceIndex)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

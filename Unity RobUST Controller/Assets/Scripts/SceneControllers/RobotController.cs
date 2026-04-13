@@ -202,8 +202,14 @@ public class RobotController : MonoBehaviour
                     switch (robotDescription.NumCables)
                     {
                         case 8:
-                            Wrench zeroWrench = new Wrench(double3.zero, double3.zero);
-                            solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, zeroWrench);
+                            // Wrench zeroWrench = new Wrench(double3.zero, double3.zero);
+                            // solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, zeroWrench);
+                            // MapTensionsToMotors(solver_tensions, motor_tension_command);
+                            // break;
+                            solver_tensions[0] = 10.0; solver_tensions[1] = 10.0;
+                            solver_tensions[2] = 10.0; solver_tensions[3] = 10.0;
+                            solver_tensions[4] = 10.0; solver_tensions[5] = 10.0;
+                            solver_tensions[6] = 10.0; solver_tensions[7] = 10.0;
                             MapTensionsToMotors(solver_tensions, motor_tension_command);
                             break;
                         case 4:
