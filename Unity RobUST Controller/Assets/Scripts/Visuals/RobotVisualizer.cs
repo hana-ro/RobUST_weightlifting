@@ -217,18 +217,15 @@ public class RobotVisualizer : MonoBehaviour
         comTrackerVisual.position = (Vector3)RobotToUnityPos(comF.c3.xyz);
         comTrackerVisual.rotation = (Quaternion)RobotToUnityRot(new quaternion(comF));
 
-        double3 barbellCenter = 0.5 * (eeLMat.c3.xyz + eeRMat.c3.xyz);
-        quaternion qL = new quaternion(new float3x3((float3)eeLF.c0.xyz, (float3)eeLF.c1.xyz, (float3)eeLF.c2.xyz));
-        quaternion qR = new quaternion(new float3x3((float3)eeRF.c0.xyz, (float3)eeRF.c1.xyz, (float3)eeRF.c2.xyz));
-        if (math.dot(qL.value, qR.value) < 0f)
-            qR.value = -qR.value;
-        quaternion barbellRot = math.normalize(new quaternion(qL.value + qR.value));
+        double4x4 barbellPose = PoseFusion.BuildBarbellPose(eeLMat, eeRMat);
+        float4x4 barbellF = (float4x4)barbellPose;
+        quaternion barbellRot = new quaternion(new float3x3((float3)barbellF.c0.xyz, (float3)barbellF.c1.xyz, (float3)barbellF.c2.xyz));
 
-        endEffectorLVisual.position = (Vector3)RobotToUnityPos((float3)barbellCenter);
+        endEffectorLVisual.position = (Vector3)RobotToUnityPos(barbellF.c3.xyz);
         endEffectorLVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
 
         
-        endEffectorRVisual.position = (Vector3)RobotToUnityPos((float3)barbellCenter);
+        endEffectorRVisual.position = (Vector3)RobotToUnityPos(barbellF.c3.xyz);
         endEffectorRVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
 
         bool showIndividual = showIndividualEndEffectorFrames;

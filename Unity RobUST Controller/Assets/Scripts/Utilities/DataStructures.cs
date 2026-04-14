@@ -87,8 +87,10 @@ public abstract class BaseController<T>
 
 /// <summary>
 /// Builds a robust midpoint/barbell pose from left and right end-effector poses.
-/// Uses the left-right position baseline as the primary lateral axis and a pose-derived
-/// up hint to avoid sudden quaternion averaging flips.
+/// Axis convention:
+/// - +X: along the bar from left tracker to right tracker
+/// - +Z: vertical-preferred (projected world up)
+/// - +Y: completes a right-handed frame
 /// </summary>
 public static class PoseFusion
 {
@@ -102,28 +104,28 @@ public static class PoseFusion
         float3 pR = (float3)poseR.c3.xyz;
         float3 baseline = pR - pL;
 
-        float3 axisY;
+        float3 axisX;
         if (math.lengthsq(baseline) > MinBaseline)
         {
-            axisY = math.normalize(baseline);
+            axisX = math.normalize(baseline);
         }
         else
         {
-            axisY = new float3(0f, 1f, 0f);
+            axisX = new float3(1f, 0f, 0f);
         }
 
         // Robot frame convention: +Z is vertical.
         float3 worldUp = new float3(0f, 0f, 1f);
-        float3 axisZ = worldUp - math.dot(worldUp, axisY) * axisY;
+        float3 axisZ = worldUp - math.dot(worldUp, axisX) * axisX;
         if (math.lengthsq(axisZ) < MinBaseline)
         {
             // If baseline becomes near-vertical, choose a stable fallback axis.
-            float3 fallback = math.abs(axisY.x) < 0.9f ? new float3(1f, 0f, 0f) : new float3(0f, 1f, 0f);
-            axisZ = fallback - math.dot(fallback, axisY) * axisY;
+            float3 fallback = math.abs(axisX.y) < 0.9f ? new float3(0f, 1f, 0f) : new float3(1f, 0f, 0f);
+            axisZ = fallback - math.dot(fallback, axisX) * axisX;
         }
         axisZ = math.normalize(axisZ);
 
-        float3 axisX = math.normalize(math.cross(axisY, axisZ));
+        float3 axisY = math.normalize(math.cross(axisZ, axisX));
         axisZ = math.normalize(math.cross(axisX, axisY));
 
         return new double4x4(
