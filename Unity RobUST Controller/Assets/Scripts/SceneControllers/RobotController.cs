@@ -33,8 +33,14 @@ public class RobotController : MonoBehaviour
     [SerializeField] private bool isLabviewControlEnabled = true;
     private bool isForcePlateEnabled = true;
 
-    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE }
+    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, TENSION }
     [SerializeField] private volatile CONTROL_MODE currentControlMode = CONTROL_MODE.OFF;
+
+    [Header("Tension Controller")]
+    [Tooltip("Feedforward vertical force setpoint [N] in robot frame. Negative applies downward load.")]
+    [SerializeField] private float tensionModeVerticalForceN = -80.0f;
+    [Tooltip("Use estimated resultant wrench feedback from last cycle for PID update.")]
+    [SerializeField] private bool tensionModeUseFeedback = false;
 
     [Header("Robot Geometry Configuration")]
     [Tooltip("Number of cables in the system. We currently support 8 or 4 cables")]
@@ -57,6 +63,7 @@ public class RobotController : MonoBehaviour
 
     // Controllers
     private ImpedanceController impedanceController;
+    private TensionController tensionController;
     private CableTensionPlanner tensionPlanner;
 
     // Static frame reference captured only at startup to prevent drift
@@ -121,6 +128,10 @@ public class RobotController : MonoBehaviour
 
         // Finally Initialize Controller modules and begin control thread
         impedanceController = new ImpedanceController(userMass);
+        tensionController = new TensionController(100.0);
+        tensionController.SetSetpoint(new Wrench(new double3(0.0, tensionModeVerticalForceN, 0.0), double3.zero));
+        tensionController.EnableForceFeedback = tensionModeUseFeedback;
+        tensionController.EnableTorqueFeedback = false;
         tensionPlanner = new CableTensionPlanner(robotDescription);
         
         controllerThread = new Thread(controlLoop)
@@ -140,6 +151,8 @@ public class RobotController : MonoBehaviour
         if (Keyboard.current.spaceKey.wasPressedThisFrame) { isTrajectoryActive = !isTrajectoryActive; }
         if (Keyboard.current.oKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.OFF; isTrajectoryActive = false; }
         if (Keyboard.current.tKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.TRANSPARENT; }
+        if (Keyboard.current.iKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.IMPEDANCE; }
+        if (Keyboard.current.yKey.wasPressedThisFrame) { currentControlMode = CONTROL_MODE.TENSION; }
     }
 
     /// <summary>
@@ -202,16 +215,16 @@ public class RobotController : MonoBehaviour
                     switch (robotDescription.NumCables)
                     {
                         case 8:
-                            // Wrench zeroWrench = new Wrench(double3.zero, double3.zero);
-                            // solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, zeroWrench);
-                            // MapTensionsToMotors(solver_tensions, motor_tension_command);
-                            // break;
-                            solver_tensions[0] = 10.0; solver_tensions[1] = 10.0;
-                            solver_tensions[2] = 10.0; solver_tensions[3] = 10.0;
-                            solver_tensions[4] = 10.0; solver_tensions[5] = 10.0;
-                            solver_tensions[6] = 10.0; solver_tensions[7] = 10.0;
+                            Wrench zeroWrench = new Wrench(double3.zero, double3.zero);
+                            solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, zeroWrench);
                             MapTensionsToMotors(solver_tensions, motor_tension_command);
                             break;
+                            // solver_tensions[0] = 10.0; solver_tensions[1] = 10.0;
+                            // solver_tensions[2] = 10.0; solver_tensions[3] = 10.0;
+                            // solver_tensions[4] = 10.0; solver_tensions[5] = 10.0;
+                            // solver_tensions[6] = 10.0; solver_tensions[7] = 10.0;
+                            // MapTensionsToMotors(solver_tensions, motor_tension_command);
+                            // break;
                         case 4:
                             solver_tensions[0] = 10.0; solver_tensions[1] = 10.0;
                             solver_tensions[2] = 10.0; solver_tensions[3] = 10.0;
@@ -233,6 +246,22 @@ public class RobotController : MonoBehaviour
                     impedanceController.UpdateState(eePoseL_RF, eePoseR_RF, filter_10Hz.EELinearVelocity, filter_10Hz.EEAngularVelocity, staticPoint);
                     Wrench goalWrench = impedanceController.computeNextControl();
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
+                    break;
+                case CONTROL_MODE.TENSION:
+                    tensionController.SetSetpoint(new Wrench(new double3(0.0, tensionModeVerticalForceN, 0.0), double3.zero));
+                    tensionController.EnableForceFeedback = tensionModeUseFeedback;
+
+                    if (tensionModeUseFeedback)
+                    {
+                        // Feedback uses the wrench generated by currently solved tensions as an estimator.
+                        Wrench measuredWrench = tensionPlanner.CalculateResultantWrench(eePoseL_RF, eePoseR_RF, solver_tensions);
+                        tensionController.UpdateMeasurement(measuredWrench);
+                    }
+
+                    Wrench tensionGoalWrench = tensionController.computeNextControl();
+                    solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, tensionGoalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     visualizer.PushGoalTrajectory(Xref_horizon.Slice(0, 1));
                     break;
