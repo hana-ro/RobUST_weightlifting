@@ -1,0 +1,284 @@
+using UnityEngine;
+using UnityEngine.InputSystem;
+using Unity.Mathematics;
+using Unity.Profiling;
+
+using System;
+using System.Threading;
+
+public class RobotController : MonoBehaviour
+{
+    static readonly ProfilerCounterValue<long> s_WorkloadNs =
+        new(RobotProfiler.Workloads, "Controller Workload", ProfilerMarkerDataUnit.TimeNanoseconds);
+
+    static readonly ProfilerCounterValue<long> s_IntervalNs =
+        new(RobotProfiler.Intervals, "Controller Execution Interval", ProfilerMarkerDataUnit.TimeNanoseconds);
+
+    [Header("Module References")]
+    [SerializeField] private TrackerManager trackerManager;
+    [SerializeField] private ForcePlateManager forcePlateManager;
+    [SerializeField] private LabviewTcpCommunicator tcpCommunicator;
+    [SerializeField] private RobotVisualizer visualizer;
+
+    [Header("Control Settings")]
+    [SerializeField] private bool isLabviewControlEnabled = true;
+    private bool isForcePlateEnabled = true;
+
+    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, TENSION, CONSTANT }
+    [SerializeField] private volatile CONTROL_MODE currentControlMode = CONTROL_MODE.OFF;
+
+
+
+    [Header("Robot Geometry Configuration")]
+    [SerializeField] private int numCables = 8;
+    [SerializeField] private float chestAPDistance = 0.2f;
+    [SerializeField] private float chestMLDistance = 0.3f;
+    [SerializeField] private float userMass = 70.0f;
+
+    [Header("Data Logging")]
+    [SerializeField] private volatile bool isLogging = false;
+    [SerializeField] private string sessionName = "Experiment";
+
+    private RobUSTDescription robotDescription;
+    private DataLogger dataLogger;
+
+    private ImpedanceController impedanceController;
+    private TensionController tensionController;
+    private CableTensionPlanner tensionPlanner;
+    
+
+    // =========================
+    // CONSTANT BARBELL ADDED
+    // =========================
+    private ConstantBarbellLoadController constantBarbellLoadController;
+
+    private TrackerData robot_frame_tracker;
+    private Thread controllerThread;
+    private volatile bool isRunning = false;
+    private volatile bool isTrajectoryActive = false;
+
+    private void Start()
+    {
+        using (System.Diagnostics.Process p = System.Diagnostics.Process.GetCurrentProcess())
+        {
+            p.PriorityClass = System.Diagnostics.ProcessPriorityClass.High;
+        }
+
+        if (!ValidateModules())
+        {
+            enabled = false;
+            return;
+        }
+
+        robotDescription =
+            RobUSTDescription.Create(numCables, chestAPDistance, chestMLDistance, userMass);
+
+        tcpCommunicator.Initialize();
+        visualizer.Initialize(robotDescription);
+        trackerManager.Initialize();
+        forcePlateManager.Initialize(robotDescription);
+
+        if (isLabviewControlEnabled)
+        {
+            tcpCommunicator.ConnectToServer();
+            tcpCommunicator.SetClosedLoopControl();
+        }
+
+        dataLogger = new DataLogger(60, 100);
+
+        System.Threading.Thread.Sleep(500);
+        trackerManager.GetFrameTrackerData(out robot_frame_tracker);
+
+        // =========================
+        // OTHER CONTROLLERS
+        // =========================
+        impedanceController = new ImpedanceController(userMass);
+        tensionController = new TensionController(50.0);
+        tensionPlanner = new CableTensionPlanner(robotDescription);
+
+        // =========================
+        // CONSTANT BARBELL INIT
+        // =========================
+        constantBarbellLoadController =
+            new ConstantBarbellLoadController(robotDescription, 10.0);
+
+        constantBarbellLoadController.SetEndLoadsPounds(2, 2);
+        constantBarbellLoadController.EnableLoadRamp = false;
+        constantBarbellLoadController.TargetLoadScale = 1.0;
+
+        controllerThread = new Thread(controlLoop)
+        {
+            Name = "Robot Controller Main",
+            IsBackground = true,
+            Priority = System.Threading.ThreadPriority.Highest
+        };
+
+        isRunning = true;
+        controllerThread.Start();
+    }
+
+    private void Update()
+    {
+        if (Keyboard.current == null) return;
+
+        if (Keyboard.current.spaceKey.wasPressedThisFrame)
+            isTrajectoryActive = !isTrajectoryActive;
+
+        if (Keyboard.current.oKey.wasPressedThisFrame)
+            currentControlMode = CONTROL_MODE.OFF;
+
+        if (Keyboard.current.tKey.wasPressedThisFrame)
+            currentControlMode = CONTROL_MODE.TRANSPARENT;
+
+        if (Keyboard.current.iKey.wasPressedThisFrame)
+            currentControlMode = CONTROL_MODE.IMPEDANCE;
+
+        if (Keyboard.current.yKey.wasPressedThisFrame)
+            currentControlMode = CONTROL_MODE.TENSION;
+
+        // =========================
+        // CONSTANT MODE KEY
+        // =========================
+        if (Keyboard.current.cKey.wasPressedThisFrame)
+            currentControlMode = CONTROL_MODE.CONSTANT;
+    }
+
+    private void controlLoop()
+    {
+        double ctrl_freq = 100.0;
+        double framePeriodMs = 1000.0 / ctrl_freq;  // 10ms @ 100Hz
+
+        Span<double> motor_tension_command = stackalloc double[14];
+        double[] solver_tensions = new double[robotDescription.NumCables];
+
+        double4x4 framePose = ToDouble4x4(robot_frame_tracker.PoseMatrix);
+        double4x4 frameInv = math.fastinverse(framePose);
+
+        SensorFilter filter_10Hz = new SensorFilter(ctrl_freq, 10.0);
+        
+        double system_frequency = System.Diagnostics.Stopwatch.Frequency;
+        double ticksToNs = 1_000_000_000.0 / system_frequency;
+        long intervalTicks = (long)(system_frequency / ctrl_freq);
+        long nextTargetTime = System.Diagnostics.Stopwatch.GetTimestamp() + intervalTicks;
+        long lastLoopTick = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        while (isRunning)
+        {
+            long loopStartTick = System.Diagnostics.Stopwatch.GetTimestamp();
+            s_IntervalNs.Value = (long)((loopStartTick - lastLoopTick) * ticksToNs);
+            lastLoopTick = loopStartTick;
+
+            trackerManager.GetEndEffectorLeftTrackerData(out TrackerData rawL);
+            trackerManager.GetEndEffectorRightTrackerData(out TrackerData rawR);
+            trackerManager.GetCoMTrackerData(out TrackerData rawCom);
+
+            double4x4 eePoseL_RF = math.mul(frameInv, ToDouble4x4(rawL.PoseMatrix));
+            double4x4 eePoseR_RF = math.mul(frameInv, ToDouble4x4(rawR.PoseMatrix));
+            double4x4 comPose_RF = math.mul(frameInv, ToDouble4x4(rawCom.PoseMatrix));
+
+            // Initialize default values for logging
+            Wrench goalWrench = default;
+            RBState goalState = default;
+
+            switch (currentControlMode)
+            {
+                case CONTROL_MODE.OFF:
+                    motor_tension_command.Clear();
+                    Array.Clear(solver_tensions, 0, solver_tensions.Length);
+                    break;
+
+                case CONTROL_MODE.TRANSPARENT:
+                    for (int i = 0; i < solver_tensions.Length; i++)
+                        solver_tensions[i] = 10.0;
+
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    break;
+
+                case CONTROL_MODE.IMPEDANCE:
+                    goalWrench = impedanceController.computeNextControl();
+                    solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    break;
+
+                case CONTROL_MODE.TENSION:
+                    tensionController.SetSetpoint(
+                        new Wrench(new double3(0, 0, 0), double3.zero));
+
+                    goalWrench = tensionController.computeNextControl();
+                    solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    break;
+
+                // =========================
+                // CONSTANT BARBELL MODE
+                // =========================
+                case CONTROL_MODE.CONSTANT:
+                    constantBarbellLoadController.UpdateState(eePoseL_RF, eePoseR_RF);
+
+                    solver_tensions =
+                        constantBarbellLoadController.computeNextControl();
+
+                    MapTensionsToMotors(solver_tensions, motor_tension_command);
+                    break;
+            }
+
+            tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
+            visualizer.PushState(comPose_RF, eePoseL_RF, eePoseR_RF, default, default);
+            
+            // Log data if logging is enabled
+            if (isLogging)
+            {
+                forcePlateManager.GetForcePlateData(0, out ForcePlateData fp1);
+                forcePlateManager.GetForcePlateData(1, out ForcePlateData fp2);
+                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, goalState);
+            }
+            
+            s_WorkloadNs.Value = (long)((System.Diagnostics.Stopwatch.GetTimestamp() - loopStartTick) * ticksToNs);
+            while (System.Diagnostics.Stopwatch.GetTimestamp() < nextTargetTime) { } // BURN wait
+
+            nextTargetTime += intervalTicks;
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (now > nextTargetTime) nextTargetTime = now + intervalTicks; // drift correction
+
+        }
+    }
+
+    private void MapTensionsToMotors(double[] solverResult, Span<double> output)
+    {
+        output.Clear();
+
+        int count = robotDescription.SolverToMotorMap.Length;
+        for (int i = 0; i < count; i++)
+        {
+            int motorIndex = robotDescription.SolverToMotorMap[i];
+            output[motorIndex] = solverResult[i];
+        }
+    }
+
+    private static double4x4 ToDouble4x4(in Matrix4x4 m)
+    {
+        return new double4x4(
+            m.m00, m.m01, m.m02, m.m03,
+            m.m10, m.m11, m.m12, m.m13,
+            m.m20, m.m21, m.m22, m.m23,
+            m.m30, m.m31, m.m32, m.m33
+        );
+    }
+
+    private bool ValidateModules()
+    {
+        return trackerManager &&
+               forcePlateManager &&
+               tcpCommunicator &&
+               visualizer;
+    }
+
+    private void OnDestroy()
+    {
+        isRunning = false;
+        tcpCommunicator?.Disconnect();
+
+        if (dataLogger != null && dataLogger.FrameCount > 0)
+            dataLogger.WriteToDisk(sessionName);
+    }
+}
