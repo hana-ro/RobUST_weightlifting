@@ -23,6 +23,20 @@ public class RobotVisualizer : MonoBehaviour
     public Camera sideViewCamera;
     [Tooltip("Perspective view (Bottom Half). This one will track the robot center.")]
     public Camera perspectiveCamera;
+
+    [Header("Barbell Visual")]
+    [Tooltip("Cylinder radius in meters for the yellow barbell visual.")]
+    public float barbellRadius = 0.02f;
+    [Tooltip("Cylinder length in meters for the yellow barbell visual.")]
+    public float barbellLength = 1.25f;
+    [Tooltip("Local rotation offset applied to the cylinder after the barbell pose is tracked.")]
+    public Vector3 barbellLocalEulerOffset = new Vector3(0f, 0f, 90f);
+    private readonly Color BarbellColor = new Color(1.0f, 0.92f, 0.16f, 0.35f); // Transparent Yellow
+
+    [Header("Force Plate Visual")]
+    [Tooltip("Toggle display of the ground reaction forces.")]
+    public bool showForceVisuals = true;
+
     
     private float metersPerNewton = 0.002f;
     private float forceCapsuleRadius = 0.01f;
@@ -119,7 +133,8 @@ public class RobotVisualizer : MonoBehaviour
         if (sideViewCamera != null)
         {
             sideViewCamera.rect = new Rect(0.5f, 0.0f, 0.5f, 1.0f);
-            sideViewCamera.transform.position = (Vector3)RobotToUnityPos(robust_center + new float3(0f, 1.5f, 0f));
+            sideViewCamera.fieldOfView = 75f;
+            sideViewCamera.transform.position = (Vector3)RobotToUnityPos(robust_center + new float3(0f, 3.3f, 0f));
             sideViewCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
         }
 
@@ -128,7 +143,7 @@ public class RobotVisualizer : MonoBehaviour
         if (perspectiveCamera != null)
         {
             perspectiveCamera.rect = new Rect(0.0f, 0.0f, 0.5f, 1.0f);
-            float3 camPos = new float3(2.5f, 1.2f, .7f);
+            float3 camPos = new float3(4.0f, 1.5f, 1.0f);
             perspectiveCamera.transform.position = (Vector3)RobotToUnityPos(camPos);
             perspectiveCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
         }
@@ -257,8 +272,16 @@ public class RobotVisualizer : MonoBehaviour
         frameTrackerVisual.localPosition = Vector3.zero; 
         frameTrackerVisual.localRotation = Quaternion.identity;
 
-        UpdateForceCapsule(grf0Capsule, RobotToUnityPos((float3)cop0), RobotToUnityPos((float3)grf0));
-        UpdateForceCapsule(grf1Capsule, RobotToUnityPos((float3)cop1), RobotToUnityPos((float3)grf1));
+        if (showForceVisuals)
+        {
+            UpdateForceCapsule(grf0Capsule, RobotToUnityPos((float3)cop0), RobotToUnityPos((float3)grf0));
+            UpdateForceCapsule(grf1Capsule, RobotToUnityPos((float3)cop1), RobotToUnityPos((float3)grf1));
+        }
+        else
+        {
+            grf0Capsule.localScale = Vector3.zero;
+            grf1Capsule.localScale = Vector3.zero;
+        }
 
         // Update Goal Trajectory
         for (int i = 0; i < GoalTrajSteps; i++)
@@ -302,6 +325,21 @@ public class RobotVisualizer : MonoBehaviour
         capsule.rotation = Quaternion.FromToRotation(Vector3.up, (Vector3)dir);
         capsule.position = (Vector3)(anchor + (dir * (length * 0.5f)));
         capsule.localScale = new Vector3(forceCapsuleRadius * 2, length * 0.5f, forceCapsuleRadius * 2);
+    }
+
+    public void SetEndEffectorFramesVisible(bool visible)
+    {
+        showIndividualEndEffectorFrames = visible;
+    }
+
+    public void SetForceVisualsVisible(bool visible)
+    {
+        showForceVisuals = visible;
+        if (!visible)
+        {
+            if (grf0Capsule != null) grf0Capsule.localScale = Vector3.zero;
+            if (grf1Capsule != null) grf1Capsule.localScale = Vector3.zero;
+        }
     }
 
     private Transform CreateCapsule(string name, Color c, Transform parent)
@@ -422,16 +460,36 @@ public class RobotVisualizer : MonoBehaviour
 
     private void GenerateBarbellVisual(Transform root)
     {
-        var barbellRootVisual = new GameObject("Barbell_Root").transform;
+        barbellRootVisual = new GameObject("Barbell_Root").transform;
         barbellRootVisual.SetParent(root); 
 
         var cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         cylinder.name = "Barbell_Rod"; 
         cylinder.transform.SetParent(barbellRootVisual);
         Destroy(cylinder.GetComponent<Collider>());
-        cylinder.GetComponent<Renderer>().material.color = Color.yellow;
+
+        // Attempt URP Unlit (fastest/cleanest), fallback to Standard
+        var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Standard");
+        var mat = new Material(shader);
+
+        // Setup Transparency (Works for both usually)
+        mat.SetFloat("_Surface", 1); // URP
+        mat.SetFloat("_Mode", 3);    // Standard
+        mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        mat.SetInt("_ZWrite", 0);
+        mat.EnableKeyword("_ALPHABLEND_ON");
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT"); 
+        mat.renderQueue = 3000;
+
+        var renderer = cylinder.GetComponent<Renderer>();
+        renderer.sharedMaterial = mat;
+
+        mat.SetColor("_BaseColor", BarbellColor);
+        mat.SetColor("_Color", BarbellColor);
         cylinder.transform.localPosition = Vector3.zero;
-        cylinder.transform.localRotation = Quaternion.identity; 
+        cylinder.transform.localRotation = Quaternion.Euler(barbellLocalEulerOffset); 
+        cylinder.transform.localScale = new Vector3(barbellRadius * 2f, barbellLength * 0.5f, barbellRadius * 2f);
     
         barbellRodVisual = cylinder.transform;
     }

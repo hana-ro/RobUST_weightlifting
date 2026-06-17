@@ -39,6 +39,9 @@ public class RobotController : MonoBehaviour
     [SerializeField] private volatile bool isLogging = false;
     [SerializeField] private string sessionName = "Experiment";
 
+    [Header("Runtime Overlay")]
+    [SerializeField] private bool showOverlay = true;
+
     private RobUSTDescription robotDescription;
     private DataLogger dataLogger;
 
@@ -49,6 +52,8 @@ public class RobotController : MonoBehaviour
     private Thread controllerThread;
     private volatile bool isRunning = false;
     private volatile bool isTrajectoryActive = false;
+    private bool showEndEffectorFrames = false;
+    private bool showForceVisuals = true;
 
     private void Start()
     {
@@ -108,7 +113,6 @@ public class RobotController : MonoBehaviour
 
         if (Keyboard.current.oKey.wasPressedThisFrame)
             currentControlMode = CONTROL_MODE.OFF;
-
         if (Keyboard.current.tKey.wasPressedThisFrame)
             currentControlMode = CONTROL_MODE.TRANSPARENT;
 
@@ -117,6 +121,44 @@ public class RobotController : MonoBehaviour
 
         if (Keyboard.current.cKey.wasPressedThisFrame)
             currentControlMode = CONTROL_MODE.CONSTANT;
+    }
+
+    private void OnGUI()
+    {
+        if (!showOverlay) return;
+
+        GUIStyle labelStyle = new GUIStyle(GUI.skin.label)
+        {
+            fontSize = 18,
+            fontStyle = FontStyle.Bold,
+            normal = { textColor = Color.white }
+        };
+
+        GUIStyle buttonStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 16,
+            fontStyle = FontStyle.Bold
+        };
+
+        const float panelWidth = 0.5f;
+        const float labelPad = 12f;
+
+        GUI.Label(new Rect(labelPad, Screen.height - 34f, 140f, 24f), "Perspective", labelStyle);
+        GUI.Label(new Rect(Screen.width * panelWidth + labelPad, Screen.height - 34f, 100f, 24f), "Side", labelStyle);
+
+        if (GUI.Button(new Rect(12f, 12f, 250f, 32f), showEndEffectorFrames ? "Hide EE Frames" : "Show EE Frames", buttonStyle))
+        {
+            showEndEffectorFrames = !showEndEffectorFrames;
+            if (visualizer != null)
+                visualizer.SetEndEffectorFramesVisible(showEndEffectorFrames);
+        }
+
+        if (GUI.Button(new Rect(12f, 50f, 250f, 32f), showForceVisuals ? "Hide GRFs" : "Display GRFs", buttonStyle))
+        {
+            showForceVisuals = !showForceVisuals;
+            if (visualizer != null)
+                visualizer.SetForceVisualsVisible(showForceVisuals);
+        }
     }
 
     private void controlLoop()
@@ -185,13 +227,14 @@ public class RobotController : MonoBehaviour
             }
 
             tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
-            visualizer.PushState(comPose_RF, eePoseL_RF, eePoseR_RF, default, default);
+
+            forcePlateManager.GetForcePlateData(0, out ForcePlateData fp1);
+            forcePlateManager.GetForcePlateData(1, out ForcePlateData fp2);
+            visualizer.PushState(comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2);
             
             // Log data if logging is enabled
             if (isLogging)
             {
-                forcePlateManager.GetForcePlateData(0, out ForcePlateData fp1);
-                forcePlateManager.GetForcePlateData(1, out ForcePlateData fp2);
                 dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, goalState);
             }
             
