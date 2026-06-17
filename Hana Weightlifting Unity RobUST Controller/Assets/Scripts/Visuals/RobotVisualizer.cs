@@ -40,6 +40,8 @@ public class RobotVisualizer : MonoBehaviour
     private Transform grf0Capsule;
     private Transform grf1Capsule;
     private Transform[] goalTrajectorySpheres;
+    private Transform barbellRootVisual;
+    private Transform barbellRodVisual;
     private Transform endEffectorLIndividualVisual;
     private Transform endEffectorRIndividualVisual;
 
@@ -92,7 +94,8 @@ public class RobotVisualizer : MonoBehaviour
         GeneratePulleyVisuals(root);
         GenerateForcePlateVisual(root);
         GenerateGoalTrajectoryVisuals(root);
-        CreateIndividualEndEffectorVisuals(root);
+        GenerateBarbellVisual(root);
+        GenerateIndividualEndEffectorVisuals(root);
 
         ConfigureSplitScreen();
 
@@ -104,34 +107,27 @@ public class RobotVisualizer : MonoBehaviour
     {
         // Screen Layout:
         // |              |              |
-        // |   Top View   |   Side View  |
-        // |  (Top Left)  |  (Top Right) |
+        // | Persepective |   Side View  |
+        // |    (Left)    |    (Right)   |
+        // |              |              |
+        // |              |              |
+        // |              |              |
+        // |              |              |
         // |______________|______________|
-        // |                             |
-        // |        Perspective          |
-        // |       (Bottom Half)         |
-        // |_____________________________|
         float3 robust_center = new float3(0f, 0.7f, 0.2f);
-
-        if (topViewCamera != null)
-        {
-            topViewCamera.rect = new Rect(0.0f, 0.5f, 0.5f, 0.5f);
-            topViewCamera.transform.position = (Vector3)RobotToUnityPos(robust_center + new float3(0f, 0f, 1.5f));
-            topViewCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center), -Vector3.right);
-        }
 
         if (sideViewCamera != null)
         {
-            sideViewCamera.rect = new Rect(0.5f, 0.5f, 0.5f, 0.5f);
+            sideViewCamera.rect = new Rect(0.5f, 0.0f, 0.5f, 1.0f);
             sideViewCamera.transform.position = (Vector3)RobotToUnityPos(robust_center + new float3(0f, 1.5f, 0f));
             sideViewCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
         }
 
-        // Perspective camera covers total bottom width (1.0f) and half height (0.5f)
+        // Perspective camera covers bottom width (0.5f) and half height (1.0f)
         // Starting at X=0, Y=0
         if (perspectiveCamera != null)
         {
-            perspectiveCamera.rect = new Rect(0.0f, 0.0f, 1.0f, 0.5f);
+            perspectiveCamera.rect = new Rect(0.0f, 0.0f, 0.5f, 1.0f);
             float3 camPos = new float3(2.5f, 1.2f, .7f);
             perspectiveCamera.transform.position = (Vector3)RobotToUnityPos(camPos);
             perspectiveCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
@@ -220,6 +216,12 @@ public class RobotVisualizer : MonoBehaviour
         double4x4 barbellPose = PoseFusion.BuildBarbellPose(eeLMat, eeRMat);
         float4x4 barbellF = (float4x4)barbellPose;
         quaternion barbellRot = new quaternion(new float3x3((float3)barbellF.c0.xyz, (float3)barbellF.c1.xyz, (float3)barbellF.c2.xyz));
+
+        if (barbellRootVisual != null)
+        {
+            barbellRootVisual.position = (Vector3)RobotToUnityPos(barbellF.c3.xyz);
+            barbellRootVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
+        }
 
         endEffectorLVisual.position = (Vector3)RobotToUnityPos(barbellF.c3.xyz);
         endEffectorLVisual.rotation = (Quaternion)RobotToUnityRot(barbellRot);
@@ -405,7 +407,7 @@ public class RobotVisualizer : MonoBehaviour
         }
     }
 
-    private void CreateIndividualEndEffectorVisuals(Transform root)
+    private void GenerateIndividualEndEffectorVisuals(Transform root)
     {
         endEffectorLIndividualVisual = Instantiate(endEffectorLVisual, root);
         endEffectorLIndividualVisual.name = "EndEffectorL_Individual";
@@ -416,6 +418,22 @@ public class RobotVisualizer : MonoBehaviour
         endEffectorRIndividualVisual.name = "EndEffectorR_Individual";
         StripPhysics(endEffectorRIndividualVisual);
         endEffectorRIndividualVisual.gameObject.SetActive(false);
+    }
+
+    private void GenerateBarbellVisual(Transform root)
+    {
+        var barbellRootVisual = new GameObject("Barbell_Root").transform;
+        barbellRootVisual.SetParent(root); 
+
+        var cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        cylinder.name = "Barbell_Rod"; 
+        cylinder.transform.SetParent(barbellRootVisual);
+        Destroy(cylinder.GetComponent<Collider>());
+        cylinder.GetComponent<Renderer>().material.color = Color.yellow;
+        cylinder.transform.localPosition = Vector3.zero;
+        cylinder.transform.localRotation = Quaternion.identity; 
+    
+        barbellRodVisual = cylinder.transform;
     }
 
     private void StripPhysics(Transform root)

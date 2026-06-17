@@ -24,7 +24,7 @@ public class RobotController : MonoBehaviour
     [SerializeField] private bool isLabviewControlEnabled = true;
     private bool isForcePlateEnabled = true;
 
-    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, TENSION, CONSTANT }
+    public enum CONTROL_MODE { OFF, TRANSPARENT, IMPEDANCE, CONSTANT }
     [SerializeField] private volatile CONTROL_MODE currentControlMode = CONTROL_MODE.OFF;
 
 
@@ -43,14 +43,7 @@ public class RobotController : MonoBehaviour
     private DataLogger dataLogger;
 
     private ImpedanceController impedanceController;
-    private TensionController tensionController;
     private CableTensionPlanner tensionPlanner;
-    
-
-    // =========================
-    // CONSTANT BARBELL ADDED
-    // =========================
-    private ConstantBarbellLoadController constantBarbellLoadController;
 
     private TrackerData robot_frame_tracker;
     private Thread controllerThread;
@@ -93,18 +86,7 @@ public class RobotController : MonoBehaviour
         // OTHER CONTROLLERS
         // =========================
         impedanceController = new ImpedanceController(userMass);
-        tensionController = new TensionController(50.0);
         tensionPlanner = new CableTensionPlanner(robotDescription);
-
-        // =========================
-        // CONSTANT BARBELL INIT
-        // =========================
-        constantBarbellLoadController =
-            new ConstantBarbellLoadController(robotDescription, 10.0);
-
-        constantBarbellLoadController.SetEndLoadsPounds(2, 2);
-        constantBarbellLoadController.EnableLoadRamp = false;
-        constantBarbellLoadController.TargetLoadScale = 1.0;
 
         controllerThread = new Thread(controlLoop)
         {
@@ -133,12 +115,6 @@ public class RobotController : MonoBehaviour
         if (Keyboard.current.iKey.wasPressedThisFrame)
             currentControlMode = CONTROL_MODE.IMPEDANCE;
 
-        if (Keyboard.current.yKey.wasPressedThisFrame)
-            currentControlMode = CONTROL_MODE.TENSION;
-
-        // =========================
-        // CONSTANT MODE KEY
-        // =========================
         if (Keyboard.current.cKey.wasPressedThisFrame)
             currentControlMode = CONTROL_MODE.CONSTANT;
     }
@@ -200,26 +176,12 @@ public class RobotController : MonoBehaviour
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
-                case CONTROL_MODE.TENSION:
-                    tensionController.SetSetpoint(
-                        new Wrench(new double3(0, 0, 0), double3.zero));
-
-                    goalWrench = tensionController.computeNextControl();
+                case CONTROL_MODE.CONSTANT:
+                    goalWrench = new Wrench(new double3(0, 0, 0), double3.zero);
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
-                // =========================
-                // CONSTANT BARBELL MODE
-                // =========================
-                case CONTROL_MODE.CONSTANT:
-                    constantBarbellLoadController.UpdateState(eePoseL_RF, eePoseR_RF);
-
-                    solver_tensions =
-                        constantBarbellLoadController.computeNextControl();
-
-                    MapTensionsToMotors(solver_tensions, motor_tension_command);
-                    break;
             }
 
             tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
