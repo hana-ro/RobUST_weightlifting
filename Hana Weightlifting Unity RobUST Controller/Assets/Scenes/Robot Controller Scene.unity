@@ -583,7 +583,7 @@ MonoBehaviour:
   chestMLDistance: 0.3
   userMass: 70
   isLogging: 0
-  sessionName: Jeonghan OP 5pBW
+  sessionName: test
   showOverlay: 1
 --- !u!4 &748268987
 Transform:

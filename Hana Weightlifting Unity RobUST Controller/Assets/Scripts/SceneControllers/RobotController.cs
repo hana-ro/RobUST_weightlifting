@@ -34,7 +34,9 @@ public class RobotController : MonoBehaviour
     [SerializeField] private float chestAPDistance = 0.2f;
     [SerializeField] private float chestMLDistance = 0.3f;
     [SerializeField] private float userMass = 70.0f;
+    private double3 barbellWeight = new double3(0 , 0, -22.2486876); 
 
+    
     [Header("Data Logging")]
     [SerializeField] private volatile bool isLogging = false;
     [SerializeField] private string sessionName = "Experiment";
@@ -167,6 +169,8 @@ public class RobotController : MonoBehaviour
         double framePeriodMs = 1000.0 / ctrl_freq;  // 10ms @ 100Hz
 
         Span<double> motor_tension_command = stackalloc double[14];
+        Span<double> measured_tensions = stackalloc double[14]; 
+        double[] actuated_tensions = new double[robotDescription.NumCables];
         double[] solver_tensions = new double[robotDescription.NumCables];
 
         double4x4 framePose = ToDouble4x4(robot_frame_tracker.PoseMatrix);
@@ -196,6 +200,7 @@ public class RobotController : MonoBehaviour
 
             // Initialize default values for logging
             Wrench goalWrench = default;
+            Wrench measuredWrench = default;
             RBState goalState = default;
 
             switch (currentControlMode)
@@ -206,9 +211,8 @@ public class RobotController : MonoBehaviour
                     break;
 
                 case CONTROL_MODE.TRANSPARENT:
-                    for (int i = 0; i < solver_tensions.Length; i++)
-                        solver_tensions[i] = 10.0;
-
+                    goalWrench = new Wrench(-barbellWeight, double3.zero);
+                    solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench); 
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
@@ -219,7 +223,7 @@ public class RobotController : MonoBehaviour
                     break;
 
                 case CONTROL_MODE.CONSTANT:
-                    goalWrench = new Wrench(new double3(0, 0, 0), double3.zero);
+                    goalWrench = new Wrench(new double3(0, 0, -50) - barbellWeight, double3.zero);
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
@@ -235,7 +239,10 @@ public class RobotController : MonoBehaviour
             // Log data if logging is enabled
             if (isLogging)
             {
-                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, goalState);
+                tcpCommunicator.GetMeasuredTensions(measured_tensions); 
+                MapMotorsToTensions(measured_tensions, actuated_tensions);
+                measuredWrench = tensionPlanner.CalculateResultantWrench(eePoseL_RF, eePoseR_RF, actuated_tensions);
+                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, measuredWrench, goalState);
             }
             
             s_WorkloadNs.Value = (long)((System.Diagnostics.Stopwatch.GetTimestamp() - loopStartTick) * ticksToNs);
@@ -259,6 +266,18 @@ public class RobotController : MonoBehaviour
             output[motorIndex] = solverResult[i];
         }
     }
+
+    private void MapMotorsToTensions(ReadOnlySpan<double> motorTensions, Span<double> actuated_tensions)
+    {
+        int[] map = robotDescription.SolverToMotorMap;
+
+        for (int actuatedCableIndex = 0; actuatedCableIndex < map.Length; actuatedCableIndex++)
+        {
+            actuated_tensions[actuatedCableIndex] = motorTensions[map[actuatedCableIndex]];
+        }
+    }
+
+
 
     private static double4x4 ToDouble4x4(in Matrix4x4 m)
     {
