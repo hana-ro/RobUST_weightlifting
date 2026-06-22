@@ -584,6 +584,7 @@ MonoBehaviour:
   userMass: 70
   isLogging: 0
   sessionName: Jeonghan OP 5pBW
+  showOverlay: 1
 --- !u!4 &748268987
 Transform:
   m_ObjectHideFlags: 0
@@ -620,6 +621,10 @@ MonoBehaviour:
   topViewCamera: {fileID: 7906750}
   sideViewCamera: {fileID: 1445960363}
   perspectiveCamera: {fileID: 1682237651}
+  barbellRadius: 0.08
+  barbellLength: 1
+  barbellLocalEulerOffset: {x: 0, y: 0, z: 90}
+  showForceVisuals: 1
 --- !u!114 &748268990
 MonoBehaviour:
   m_ObjectHideFlags: 0
