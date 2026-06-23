@@ -76,11 +76,15 @@ public sealed class RobUSTDescription
 
     // Mapping from solver index to motor driver index for the full set
     // Corresponds to the order in AllPulleyPositions
+    // Pulley index 0 -> Motor 10
     public static readonly int[] FullMotorMapping = new int[] { 9, 4, 3, 10, 7, 6, 1, 12 };
 
     // Source-index grouping by end-effector side (x in local EE frame)
     private static readonly int[] LeftSideSourceIndices = new int[] { 0, 3, 4, 7 };
+    // Motors 5, 4, 7, 2 are on the left side of the robot
+    
     private static readonly int[] RightSideSourceIndices = new int[] { 1, 2, 5, 6 };
+    // Motors 10, 11, 8, 13 are on the right side of the robot 
 
     public readonly int[] SolverToMotorMap;
     public readonly int[] LeftCableIndices;
