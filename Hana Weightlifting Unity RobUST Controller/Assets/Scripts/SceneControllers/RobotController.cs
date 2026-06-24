@@ -36,6 +36,10 @@ public class RobotController : MonoBehaviour
     [SerializeField] private float userMass = 70.0f;
     private double3 barbellWeight = new double3(0 , 0, -22.2486876); 
 
+
+    [Header("Constant Load Mode")]
+    [SerializeField, Min(0f)] private float constantLoadKG = 5.0f;
+
     
     [Header("Data Logging")]
     [SerializeField] private volatile bool isLogging = false;
@@ -200,6 +204,7 @@ public class RobotController : MonoBehaviour
 
             // Initialize default values for logging
             Wrench goalWrench = default;
+            Wrench solverWrench = default;
             Wrench measuredWrench = default;
             RBState goalState = default;
 
@@ -223,7 +228,7 @@ public class RobotController : MonoBehaviour
                     break;
 
                 case CONTROL_MODE.CONSTANT:
-                    goalWrench = new Wrench(new double3(0, 0, -50) - barbellWeight, double3.zero);
+                    goalWrench = new Wrench(new double3(0, 0, -(constantLoadKG * 9.81f)) - barbellWeight, double3.zero);
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
@@ -241,8 +246,9 @@ public class RobotController : MonoBehaviour
             {
                 tcpCommunicator.GetMeasuredTensions(measured_tensions); 
                 MapMotorsToTensions(measured_tensions, actuated_tensions);
+                solverWrench = tensionPlanner.CalculateResultantWrench(eePoseL_RF, eePoseR_RF, solver_tensions);
                 measuredWrench = tensionPlanner.CalculateResultantWrench(eePoseL_RF, eePoseR_RF, actuated_tensions);
-                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, measuredWrench, goalState);
+                dataLogger.Log(loopStartTick, comPose_RF, eePoseL_RF, eePoseR_RF, fp1, fp2, goalWrench, solverWrench, measuredWrench, goalState);
             }
             
             s_WorkloadNs.Value = (long)((System.Diagnostics.Stopwatch.GetTimestamp() - loopStartTick) * ticksToNs);

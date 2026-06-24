@@ -22,6 +22,7 @@ public class DataLogger
         public ForcePlateData FP1;
         public ForcePlateData FP2;
         public Wrench GoalWrench;
+        public Wrench SolverWrench; 
         public Wrench MeasuredWrench;
         public RBState GoalState;
     }
@@ -64,7 +65,7 @@ public class DataLogger
     /// </summary>
     public void Log(long timestamp_tick, in double4x4 comPose, in double4x4 eePoseL, in double4x4 eePoseR,
                     in ForcePlateData fp1, in ForcePlateData fp2, 
-                    in Wrench goalWrench, in Wrench measuredWrench, in RBState goalState)
+                    in Wrench goalWrench, in Wrench measuredWrench, in Wrench solverWrench, in RBState goalState)
     {
         if (_cursor >= _maxFrames) return; 
 
@@ -80,6 +81,7 @@ public class DataLogger
         frame.FP2 = fp2;
         frame.GoalWrench = goalWrench;
         frame.MeasuredWrench = measuredWrench;
+        frame.SolverWrench = solverWrench;
         frame.GoalState = goalState;
 
         _cursor++;
@@ -117,6 +119,8 @@ public class DataLogger
                 sb.Append("FP1_Fx,FP1_Fy,FP1_Fz,FP1_CoPx,FP1_CoPy,FP1_CoPz,");
                 sb.Append("FP2_Fx,FP2_Fy,FP2_Fz,FP2_CoPx,FP2_CoPy,FP2_CoPz,");
                 sb.Append("Goal_Fx,Goal_Fy,Goal_Fz,Goal_Tx,Goal_Ty,Goal_Tz,");
+                sb.Append("Solver_Fx,Solver_Fy,Solver_Fz,Solver_Tx,Solver_Ty,Solver_Tz,");
+                // to double check that my CalculateResultantWrench() is correct, I will log the QP calculated wrench
                 sb.Append("Measured_Fx,Measured_Fy,Measured_Fz,Measured_Tx,Measured_Ty,Measured_Tz,");
 
                 // RBState fields: p (position), th (euler), v (linear vel), w (angular vel)
@@ -141,7 +145,8 @@ public class DataLogger
                     AppendVec3(sb, f.FP2.Force); AppendVec3(sb, f.FP2.CoP);
                     
                     AppendVec3(sb, f.GoalWrench.Force); AppendVec3(sb, f.GoalWrench.Torque);
-                    AppendVec3(sb, f.MeasuredWrench.Force); AppendVec3(sb, f.MeasuredWrench.Torque); 
+                    AppendVec3(sb, f.SolverWrench.Force); AppendVec3(sb, f.SolverWrench.Torque);
+                    AppendVec3(sb, f.MeasuredWrench.Force); AppendVec3(sb, f.MeasuredWrench.Torque);
 
                     // RBState unpacking 
                     AppendVec3(sb, f.GoalState.p);
