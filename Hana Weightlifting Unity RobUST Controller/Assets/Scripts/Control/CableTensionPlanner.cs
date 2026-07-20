@@ -31,7 +31,7 @@ public class CableTensionPlanner
     // Solver parameters
     private double forceEpsilon = 0.01;
     private double torqueEpsilon = 1000;
-    private double minTension = 10.0;
+    private double minTension = 20.0;
     private double maxTension = 200;
 
     // Add new fields for QP state and warm start solution

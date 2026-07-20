@@ -80,8 +80,8 @@ public class DataLogger
         frame.FP1 = fp1;
         frame.FP2 = fp2;
         frame.GoalWrench = goalWrench;
-        frame.MeasuredWrench = measuredWrench;
         frame.SolverWrench = solverWrench;
+        frame.MeasuredWrench = measuredWrench;
         frame.GoalState = goalState;
 
         _cursor++;
