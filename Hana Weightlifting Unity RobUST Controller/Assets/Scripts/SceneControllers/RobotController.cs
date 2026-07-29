@@ -149,8 +149,8 @@ public class RobotController : MonoBehaviour
         const float panelWidth = 0.5f;
         const float labelPad = 12f;
 
-        GUI.Label(new Rect(labelPad, Screen.height - 34f, 140f, 24f), "Perspective", labelStyle);
-        GUI.Label(new Rect(Screen.width * panelWidth + labelPad, Screen.height - 34f, 100f, 24f), "Side", labelStyle);
+        GUI.Label(new Rect(labelPad, Screen.height - 34f, 140f, 24f), "Side", labelStyle);
+        GUI.Label(new Rect(Screen.width * panelWidth + labelPad, Screen.height - 34f, 100f, 24f), "Back Perspective", labelStyle);
 
         if (GUI.Button(new Rect(12f, 12f, 250f, 32f), showEndEffectorFrames ? "Hide EE Frames" : "Show EE Frames", buttonStyle))
         {

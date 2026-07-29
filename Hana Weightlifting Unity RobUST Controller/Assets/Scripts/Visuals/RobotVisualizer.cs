@@ -19,10 +19,10 @@ public class RobotVisualizer : MonoBehaviour
     [Header("Multi-Camera Setup")]
     [Tooltip("Top-Down view (Top Left). Manually placed.")]
     public Camera topViewCamera;
-    [Tooltip("Side view (Top Right). Manually placed.")]
+    [Tooltip("Side view (Left Half). Manually placed.")]
     public Camera sideViewCamera;
-    [Tooltip("Perspective view (Bottom Half). This one will track the robot center.")]
-    public Camera perspectiveCamera;
+    [Tooltip("Back view view (Right Half). This one will track the robot center.")]
+    public Camera backViewCamera;
 
     [Header("Barbell Visual")]
     [Tooltip("Cylinder radius in meters for the yellow barbell visual.")]
@@ -37,7 +37,11 @@ public class RobotVisualizer : MonoBehaviour
     [Tooltip("Toggle display of the ground reaction forces.")]
     public bool showForceVisuals = true;
 
-    
+    [Header("Pulley Visual")]
+    [Tooltip("Toggle display of the pulley positions.")]
+    public bool showPulleyDebug = true;
+    private GameObject pulleyDebugRoot;
+
     private float metersPerNewton = 0.002f;
     private float forceCapsuleRadius = 0.01f;
 
@@ -81,7 +85,7 @@ public class RobotVisualizer : MonoBehaviour
             endEffectorLVisual == null ||
             endEffectorRVisual == null ||
             frameTrackerVisual == null || 
-            perspectiveCamera == null ||
+            backViewCamera == null ||
             topViewCamera == null ||
             sideViewCamera == null)
         {
@@ -93,12 +97,12 @@ public class RobotVisualizer : MonoBehaviour
         StripPhysics(endEffectorLVisual);
         StripPhysics(endEffectorRVisual);
         StripPhysics(frameTrackerVisual);
-        StripPhysics(perspectiveCamera.transform);
+        StripPhysics(backViewCamera.transform);
         StripPhysics(topViewCamera.transform);
         StripPhysics(sideViewCamera.transform);
         Destroy(topViewCamera.GetComponent<AudioListener>());
         Destroy(sideViewCamera.GetComponent<AudioListener>());
-        Destroy(perspectiveCamera.GetComponent<AudioListener>());
+        Destroy(backViewCamera.GetComponent<AudioListener>());
 
         var root = new GameObject("Generated_Visuals").transform;
         root.SetParent(this.transform);
@@ -120,34 +124,46 @@ public class RobotVisualizer : MonoBehaviour
     private void ConfigureSplitScreen()
     {
         // Screen Layout:
-        // |              |              |
-        // | Persepective |   Side View  |
-        // |    (Left)    |    (Right)   |
-        // |              |              |
-        // |              |              |
-        // |              |              |
-        // |              |              |
-        // |______________|______________|
+        // ----------------------+----------------------
+        // |                      |                     |
+        // | Side View from Left  |    Back View        |
+        // |       (Left)         |     (Right)         |
+        // |                      |                     |
+        // |                      |                     |
+        // ----------------------+----------------------
         float3 robust_center = new float3(0f, 0.7f, 0.2f);
 
         if (sideViewCamera != null)
-        {
-            sideViewCamera.rect = new Rect(0.5f, 0.0f, 0.5f, 1.0f);
-            sideViewCamera.fieldOfView = 75f;
-            sideViewCamera.transform.position = (Vector3)RobotToUnityPos(robust_center + new float3(0f, 3.3f, 0f));
-            sideViewCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
-        }
+            {
+                // sideViewCamera.orthographic = true;
+                // sideViewCamera.orthographicSize = 2.25f;
+                // Left half of screen
+                sideViewCamera.rect = new Rect(0.0f, 0.0f, 0.5f, 1.0f);
+                float3 sidePos = robust_center + new float3(0f, -3.3f, 0f);
 
-        // Perspective camera covers bottom width (0.5f) and half height (1.0f)
-        // Starting at X=0, Y=0
-        if (perspectiveCamera != null)
-        {
-            perspectiveCamera.rect = new Rect(0.0f, 0.0f, 0.5f, 1.0f);
-            float3 camPos = new float3(4.0f, 1.5f, 1.0f);
-            perspectiveCamera.transform.position = (Vector3)RobotToUnityPos(camPos);
-            perspectiveCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
-        }
-    }
+                sideViewCamera.transform.position = (Vector3)RobotToUnityPos(sidePos);
+                sideViewCamera.transform.LookAt((Vector3)RobotToUnityPos(robust_center));
+            }
+
+
+            //
+            // RIGHT PANEL: BACK VIEW
+            //
+            if (backViewCamera != null)
+            {
+                backViewCamera.orthographic = true;
+                backViewCamera.orthographicSize = 2.25f;
+                backViewCamera.rect = new Rect(0.5f, 0.0f, 0.5f, 1.0f);
+
+                // Back view along robot X axis
+                float3 backPos = robust_center + new float3(4.0f, 0f, 0f);
+                float3 backViewCenter = robust_center + new float3(0f, 0.5f, 0f);
+
+
+                backViewCamera.transform.position = (Vector3)RobotToUnityPos(backPos);
+                backViewCamera.transform.LookAt((Vector3)RobotToUnityPos(backViewCenter), Vector3.up);
+            }
+}
 
     /// <summary>
     /// Updated API: Accepts double4x4 directly.
@@ -283,6 +299,10 @@ public class RobotVisualizer : MonoBehaviour
             grf1Capsule.localScale = Vector3.zero;
         }
 
+        if (pulleyDebugRoot != null)
+        {
+            pulleyDebugRoot.SetActive(showPulleyDebug);
+        }
         // Update Goal Trajectory
         for (int i = 0; i < GoalTrajSteps; i++)
             goalTrajectorySpheres[i].position = (Vector3)RobotToUnityPos((float3)goalSnapshot[i]);
@@ -355,13 +375,17 @@ public class RobotVisualizer : MonoBehaviour
 
     private void GeneratePulleyVisuals(Transform root)
     {
+        pulleyDebugRoot = new GameObject("PulleyDebugVisuals");
+        pulleyDebugRoot.transform.SetParent(root);
+        
         pulleySpheres = new Transform[robot.FramePulleyPositions.Length];
         
         for (int i = 0; i < robot.FramePulleyPositions.Length; i++)
         {
             var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             sphere.name = $"Pulley_{i}";
-            sphere.transform.SetParent(root);
+
+            sphere.transform.SetParent(pulleyDebugRoot.transform);
             sphere.transform.localScale = new Vector3(0.1f, 0.1f, 0.1f);
             
             Destroy(sphere.GetComponent<Collider>());
@@ -370,6 +394,7 @@ public class RobotVisualizer : MonoBehaviour
             sphere.transform.position = (Vector3)RobotToUnityPos((float3)robot.FramePulleyPositions[i]);
             pulleySpheres[i] = sphere.transform;
         }
+        pulleyDebugRoot.SetActive(showPulleyDebug);
     }
     
     private void GenerateForcePlateVisual(Transform root)

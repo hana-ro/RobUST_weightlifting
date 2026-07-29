@@ -65,7 +65,7 @@ public class DataLogger
     /// </summary>
     public void Log(long timestamp_tick, in double4x4 comPose, in double4x4 eePoseL, in double4x4 eePoseR,
                     in ForcePlateData fp1, in ForcePlateData fp2, 
-                    in Wrench goalWrench, in Wrench measuredWrench, in Wrench solverWrench, in RBState goalState)
+                    in Wrench goalWrench, in Wrench solverWrench, in Wrench measuredWrench, in RBState goalState)
     {
         if (_cursor >= _maxFrames) return; 
 
