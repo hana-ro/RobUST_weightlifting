@@ -57,6 +57,7 @@ public class RobotController : MonoBehaviour
     private TrackerData robot_frame_tracker;
     private Thread controllerThread;
     private volatile bool isRunning = false;
+    private volatile bool tcpAvailable = false; 
     private volatile bool isTrajectoryActive = false;
     private bool showEndEffectorFrames = false;
     private bool showForceVisuals = true;
@@ -89,6 +90,7 @@ public class RobotController : MonoBehaviour
         }
 
         dataLogger = new DataLogger(60, 100);
+        tcpAvailable = true;
 
         System.Threading.Thread.Sleep(500);
         trackerManager.GetFrameTrackerData(out robot_frame_tracker);
@@ -202,6 +204,8 @@ public class RobotController : MonoBehaviour
             double4x4 eePoseR_RF = math.mul(frameInv, ToDouble4x4(rawR.PoseMatrix));
             double4x4 comPose_RF = math.mul(frameInv, ToDouble4x4(rawCom.PoseMatrix));
 
+            Debug.Log($"comPose_RF: {comPose_RF.c3}");
+
             // Initialize default values for logging
             Wrench goalWrench = default;
             Wrench solverWrench = default;
@@ -212,30 +216,50 @@ public class RobotController : MonoBehaviour
             {
                 case CONTROL_MODE.OFF:
                     motor_tension_command.Clear();
+                    if (CanSendTcpCommands())
+                    {
+                        tcpCommunicator.SetOpenLoopControl();
+                    }
                     Array.Clear(solver_tensions, 0, solver_tensions.Length);
                     break;
 
                 case CONTROL_MODE.TRANSPARENT:
                     goalWrench = new Wrench(-barbellWeight, double3.zero);
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench); 
+                    if (CanSendTcpCommands())
+                    {
+                        tcpCommunicator.SetClosedLoopControl();
+                    }
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
                 case CONTROL_MODE.IMPEDANCE:
                     goalWrench = impedanceController.computeNextControl();
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
+                    if (CanSendTcpCommands())
+                    {
+                        tcpCommunicator.SetClosedLoopControl();
+                    }
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
                 case CONTROL_MODE.CONSTANT:
                     goalWrench = new Wrench(new double3(0, 0, -(constantLoadKG * 9.81f)) - barbellWeight, double3.zero);
                     solver_tensions = tensionPlanner.CalculateTensions(eePoseL_RF, eePoseR_RF, goalWrench);
+                    if (CanSendTcpCommands())
+                    {
+                        tcpCommunicator.SetClosedLoopControl();
+                    }
                     MapTensionsToMotors(solver_tensions, motor_tension_command);
                     break;
 
             }
+            if (CanSendTcpCommands())
+            {
+                tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
+            }
 
-            tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
+            //tcpCommunicator.UpdateTensionSetpoint(motor_tension_command);
 
             forcePlateManager.GetForcePlateData(0, out ForcePlateData fp1);
             forcePlateManager.GetForcePlateData(1, out ForcePlateData fp2);
@@ -293,6 +317,40 @@ public class RobotController : MonoBehaviour
             m.m20, m.m21, m.m22, m.m23,
             m.m30, m.m31, m.m32, m.m33
         );
+    }
+
+    // private bool InitializeTcpForActuation()
+    // {
+    //     if (!isLabviewControlEnabled)
+    //     {
+    //         return false;
+    //     }
+    //     if (tcpCommunicator == null)
+    //     {
+    //         Debug.LogWarning("RobotController: TCP communicator is unavailable. Robot commands will be skipped; tracker logging will continue.", this);
+    //         return false;
+    //     }
+    //     try
+    //     {
+    //         if (!tcpCommunicator.Initialize())
+    //         {
+    //             Debug.LogWarning("RobotController: TCP communicator initialization failed. Robot commands will be skipped; tracker logging will continue.", this);
+    //             return false;
+    //         }
+
+    //         tcpCommunicator.ConnectToServer();
+    //         return true;
+    //     }
+    //     catch (Exception ex)
+    //     {
+    //         Debug.LogWarning($"RobotController: TCP setup failed ({ex.Message}). Robot commands will be skipped; tracker logging will continue.", this);
+    //         return false;
+    //     }
+    // }
+    
+    private bool CanSendTcpCommands()
+    {
+        return tcpAvailable && tcpCommunicator != null && tcpCommunicator.IsConnected; 
     }
 
     private bool ValidateModules()
