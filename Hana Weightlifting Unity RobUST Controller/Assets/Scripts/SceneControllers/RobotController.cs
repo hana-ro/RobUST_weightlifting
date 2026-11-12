@@ -38,7 +38,7 @@ public class RobotController : MonoBehaviour
 
 
     [Header("Constant Load Mode")]
-    [SerializeField, Min(0f)] private float constantLoadKG = 5.0f;
+    [SerializeField] private float constantLoadKG = 5.0f;
 
     
     [Header("Data Logging")]
@@ -204,7 +204,7 @@ public class RobotController : MonoBehaviour
             double4x4 eePoseR_RF = math.mul(frameInv, ToDouble4x4(rawR.PoseMatrix));
             double4x4 comPose_RF = math.mul(frameInv, ToDouble4x4(rawCom.PoseMatrix));
 
-            Debug.Log($"comPose_RF: {comPose_RF.c3}");
+            //Debug.Log($"comPose_RF: {comPose_RF}");
 
             // Initialize default values for logging
             Wrench goalWrench = default;

@@ -112,6 +112,7 @@ public class ForcePlateManager : MonoBehaviour
             long loopStartTick = System.Diagnostics.Stopwatch.GetTimestamp();
             s_IntervalNs.Value = (long)((loopStartTick - lastLoopTick) * ticksToNs);
             lastLoopTick = loopStartTick;
+        
 
             // Process each force plate directly
             for (int i = 0; i < numForcePlates; i++)
